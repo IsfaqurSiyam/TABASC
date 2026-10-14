@@ -4,7 +4,12 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "ganache:start": "ganache --wallet.mnemonic \"candy maple cake sugar pudding cream honey rich smooth crumble sweet treat\" --server.host 127.0.0.1 --server.port 8545 --chain.networkId 5777 --database.dbPath ../ganache-data",
+    "contracts:compile": "truffle compile --config ../truffle-config.js",
+    "contracts:migrate": "truffle migrate --reset --config ../truffle-config.js",
+    "contracts:test": "truffle test --config ../truffle-config.js",
+    "sync:env": "node scripts/sync-env.js"
   },
   "keywords": [],
   "author": "",
