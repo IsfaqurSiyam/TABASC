@@ -1,0 +1,156 @@
+import React, { useState } from 'react';
+import axios from 'axios';
+import { Link } from 'react-router-dom';
+import ReputationScanner from '../Common/ReputationScanner';
+
+function ConsumerDashboard() {
+  const [batchId, setBatchId] = useState('');
+  const [product, setProduct] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const [feedbackScore, setFeedbackScore] = useState(5);
+  const [feedbackMsg, setFeedbackMsg] = useState('');
+  const [feedbackError, setFeedbackError] = useState('');
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+
+  const handleSearch = async (e) => {
+    e.preventDefault();
+    setError('');
+    setProduct(null);
+    setHistory([]);
+    setLoading(true);
+    try {
+      const res = await axios.get(`${process.env.REACT_APP_API_URL}/products/batch/${batchId}`);
+      setProduct(res.data);
+
+      const trackRes = await axios.get(`${process.env.REACT_APP_API_URL}/tracking/${res.data.blockchainId}`);
+      setHistory(trackRes.data.history);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Product not found');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFeedback = async () => {
+    setFeedbackMsg('');
+    setFeedbackError('');
+    setFeedbackLoading(true);
+    try {
+      const response = await axios.post(
+        `${process.env.REACT_APP_API_URL}/reputation/reviews`,
+        { batchId: product.batchId, rating: Number(feedbackScore) }
+      );
+      setFeedbackMsg(
+        `Review recorded. Average: ${response.data.averageRating}/10 from ` +
+        `${response.data.reviewCount} reviews. Farmer score: ` +
+        `${response.data.finalScore}/1000.`
+      );
+    } catch (err) {
+      setFeedbackError(err.response?.data?.message || 'Review submission failed');
+    } finally {
+      setFeedbackLoading(false);
+    }
+  };
+
+  return (
+    <div className="role-dashboard">
+      <h2>Consumer — Product Traceability</h2>
+      <div className="role-hero">
+        <div>
+          <p className="hero-kicker">Consumer verification</p>
+          <h2>Know the story behind what you buy.</h2>
+          <p>Scan a reputation QR code or search a batch to explore its origin, journey, and verified trust record.</p>
+        </div>
+      </div>
+      <div className="kpi-grid">
+        <div className="kpi-card"><strong>01</strong><span>Search a batch</span></div>
+        <div className="kpi-card"><strong>02</strong><span>Follow its journey</span></div>
+        <div className="kpi-card"><strong>03</strong><span>Verify reputation</span></div>
+        <div className="kpi-card"><strong>✓</strong><span>Make informed choices</span></div>
+      </div>
+      <div className="workflow-strip">
+        <div className="workflow-step"><b>1</b><div><strong>Find the product</strong><span>Enter a batch ID or scan a stakeholder QR code.</span></div></div>
+        <div className="workflow-step"><b>2</b><div><strong>Review the journey</strong><span>Inspect origin, movement, status, and available notes.</span></div></div>
+        <div className="workflow-step"><b>3</b><div><strong>Verify trust</strong><span>Use the reputation score to make an informed choice.</span></div></div>
+      </div>
+      <ReputationScanner />
+
+      <form id="workspace" onSubmit={handleSearch} style={{ marginBottom: 24, maxWidth: 500 }}>
+        <div className="section-heading">
+          <h3>Trace a product</h3>
+          <p>Search by batch ID</p>
+        </div>
+        <label>Enter Batch ID (from product QR code)</label><br />
+        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+          <input
+            value={batchId}
+            onChange={(e) => setBatchId(e.target.value)}
+            placeholder="e.g. BATCH-2026-001"
+            required
+            style={{ flex: 1, padding: 8 }}
+          />
+          <button type="submit" disabled={loading} style={{ padding: '8px 16px' }}>
+            {loading ? 'Searching...' : 'Search'}
+          </button>
+        </div>
+      </form>
+
+      {error && <p style={{ color: 'red' }}>{error}</p>}
+
+      {product && (
+        <div id="records" style={{ border: '1px solid #ccc', padding: 16, maxWidth: 600 }}>
+          <h3>{product.name}</h3>
+          <p><strong>Batch ID:</strong> {product.batchId}</p>
+          <p><strong>Category:</strong> {product.category}</p>
+          <p><strong>Current Status:</strong> {product.currentStatus}</p>
+          <p><strong>Farmer:</strong> {product.farmer?.name} — {product.farmer?.location}</p>
+
+          <h4>Supply Chain History</h4>
+          {history.length === 0 ? (
+            <p>No tracking history yet.</p>
+          ) : (
+            <ul>
+              {history.map((h, i) => (
+                <li key={i}>
+                  <strong>{h.status}</strong> at {h.location} — {h.timestamp}
+                  {h.notes && <em> ({h.notes})</em>}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <p style={{ marginTop: 16 }}>
+            <Link to={`/scan/${product.batchId}`}>View public traceability page →</Link>
+          </p>
+
+          <hr style={{ margin: '16px 0' }} />
+
+          <h4>Leave Feedback</h4>
+          {feedbackMsg && <p style={{ color: 'green' }}>{feedbackMsg}</p>}
+          {feedbackError && <p style={{ color: 'red' }}>{feedbackError}</p>}
+          <label>Your rating (1–10)</label><br />
+          <input
+            type="number" min="1" max="10"
+            step="1"
+            value={feedbackScore}
+            onChange={(e) => setFeedbackScore(e.target.value)}
+            style={{ padding: 6, marginRight: 8 }}
+          />
+          <button
+            type="button"
+            onClick={handleFeedback}
+            disabled={feedbackLoading}
+            style={{ padding: '6px 12px' }}
+          >
+            {feedbackLoading ? 'Submitting...' : 'Submit Feedback'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default ConsumerDashboard;

@@ -1,0 +1,12 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^node server\\.js$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^Push-Location client; node -e \"const d=require\\('dotenv'\\)\\.config\\(\\{quiet:true\\}\\); const required=\\['MONGO_URI','GANACHE_URL','JWT_SECRET','PRODUCT_CONTRACT','TRACKING_CONTRACT','REPUTATION_CONTRACT'\\]; console\\.log\\('Required backend config keys:', required\\.map\\(k=>k\\+'='\\+\\(d\\.parsed\\?\\.\\[k\\] \\? 'set':'missing'\\)\\)\\.join\\(', '\\)\\)\"; Pop-Location$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
