@@ -36,6 +36,12 @@ Create the first administrator with `npm run seed:admin --prefix client`.
 After a contract redeployment, restore approved on-chain roles with
 `npm run sync:roles --prefix client`.
 
+Public registration creates a consumer account and may include a request for a
+farmer, distributor, retailer, or inspector role. The administrator dashboard
+reviews these requests and grants the matching on-chain role before activating
+the role in MongoDB. The web dashboards expose the corresponding custody,
+shipment, buyer, recall, and product-verification workflows.
+
 Back up MongoDB with `mongodump` before running `npm run migrate:wallets
 --prefix client`; that script replaces legacy wallet addresses while retaining
 them in `legacyWallet`.

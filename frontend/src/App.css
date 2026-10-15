@@ -198,6 +198,16 @@ button { cursor: pointer; }
 .timeline { list-style: none; padding: 0; margin: 0; }
 .timeline li { position: relative; padding: 0 0 20px 28px; border-left: 2px solid #c8dbce; }
 .timeline li::before { content: ""; position: absolute; left: -7px; top: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--gold); border: 3px solid white; box-shadow: 0 0 0 1px var(--gold); }
+.form-hint { color: var(--muted); font-size: 13px; line-height: 1.5; }
+.approval-notice { max-width: 1400px; margin: 22px auto 0; padding: 14px 18px; border: 1px solid #e4d4a8; border-radius: 12px; background: #fff8e7; color: #604b17; }
+.verification-warning { display: inline-flex; align-items: center; margin-top: 14px; padding: 8px 12px; border-radius: 999px; background: #fff0f0; color: var(--danger); font-size: 12px; font-weight: 800; }
+.public-section .error-message { padding: 11px 13px; border-radius: 10px; background: #fff0f0; color: var(--danger); font-size: 14px; }
+.dashboard-shell textarea { width: 100%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: #fbfdfb; color: var(--ink); font: inherit; resize: vertical; }
+.admin-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.admin-table-wrap { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: white; }
+.admin-table-wrap table { width: 100%; min-width: 760px; }
+.admin-table-wrap td button { margin: 3px; padding: 8px 10px; }
+.admin-table-wrap td { white-space: nowrap; }
 
 @media (max-width: 820px) {
   .auth-page { grid-template-columns: 1fr; }

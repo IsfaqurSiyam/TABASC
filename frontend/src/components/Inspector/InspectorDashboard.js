@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { useAuth } from '../../context/AuthContext';
+import SupplyChainActions from '../Common/SupplyChainActions';
 
 function InspectorDashboard() {
+  const { user } = useAuth();
   const [products, setProducts] = useState([]);
 
   const [batchId, setBatchId] = useState('');
@@ -179,6 +182,9 @@ function InspectorDashboard() {
           </div>
         )}
       </div>
+      {user?.role === 'inspector' && (
+        <SupplyChainActions products={products} role="inspector" onComplete={fetchProducts} />
+      )}
     </div>
   );
 }

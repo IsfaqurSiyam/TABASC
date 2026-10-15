@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import ReputationQRCode from '../Common/ReputationQRCode';
+import SupplyChainActions from '../Common/SupplyChainActions';
 
 function FarmerDashboard() {
   const [products, setProducts] = useState([]);
@@ -8,7 +9,7 @@ function FarmerDashboard() {
   const [formData, setFormData] = useState({
     name: '', description: '', batchId: '',
     category: 'vegetables', quantity: '', unit: 'kg',
-    harvestDate: '', expiryDate: ''
+    harvestDate: '', expiryDate: '', deliveryWindow: '3'
   });
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -35,19 +36,41 @@ function FarmerDashboard() {
     setMessage('');
     setLoading(true);
     try {
-      const res = await axios.post(`${process.env.REACT_APP_API_URL}/products/register`, formData);
+      const res = await axios.post(`${process.env.REACT_APP_API_URL}/products/register`, {
+        ...formData,
+        quantity: Number(formData.quantity),
+        deliveryWindow: Number(formData.deliveryWindow)
+      });
       setMessage(`Product registered! Blockchain ID: ${res.data.blockchainId}`);
       setShowForm(false);
       setFormData({
         name: '', description: '', batchId: '',
         category: 'vegetables', quantity: '', unit: 'kg',
-        harvestDate: '', expiryDate: ''
+        harvestDate: '', expiryDate: '', deliveryWindow: '3'
       });
       fetchProducts();
     } catch (err) {
       setMessage(err.response?.data?.message || 'Registration failed');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const downloadProductQr = async (product) => {
+    setMessage('');
+    try {
+      const response = await axios.get(
+        `${process.env.REACT_APP_API_URL}/products/${product._id}/qr`,
+        { responseType: 'blob' }
+      );
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `tabasc-product-${product.batchId}.png`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setMessage(error.response?.data?.message || 'Unable to download product QR code');
     }
   };
 
@@ -107,7 +130,7 @@ function FarmerDashboard() {
           </div>
           <div style={{ marginBottom: 10 }}>
             <label>Quantity</label><br />
-            <input type="number" name="quantity" value={formData.quantity} onChange={handleChange} required style={{ width: '100%', padding: 6 }} />
+            <input type="number" name="quantity" min="0.000001" step="any" value={formData.quantity} onChange={handleChange} required style={{ width: '100%', padding: 6 }} />
           </div>
           <div style={{ marginBottom: 10 }}>
             <label>Harvest Date</label><br />
@@ -117,11 +140,17 @@ function FarmerDashboard() {
             <label>Expiry Date</label><br />
             <input type="date" name="expiryDate" value={formData.expiryDate} onChange={handleChange} style={{ width: '100%', padding: 6 }} />
           </div>
+          <div style={{ marginBottom: 10 }}>
+            <label>Delivery window (days)</label><br />
+            <input type="number" name="deliveryWindow" min="1" step="1" value={formData.deliveryWindow} onChange={handleChange} required style={{ width: '100%', padding: 6 }} />
+          </div>
           <button type="submit" disabled={loading} style={{ padding: '8px 16px' }}>
             {loading ? 'Registering...' : 'Register Product'}
           </button>
         </form>
       )}
+
+      <SupplyChainActions products={products} role="farmer" onComplete={fetchProducts} />
 
       <div className="section-heading">
         <h3>My Products ({products.length})</h3>
@@ -134,6 +163,7 @@ function FarmerDashboard() {
             <th style={{ padding: 8, textAlign: 'left' }}>Batch ID</th>
             <th style={{ padding: 8, textAlign: 'left' }}>Status</th>
             <th style={{ padding: 8, textAlign: 'left' }}>Quantity</th>
+            <th style={{ padding: 8, textAlign: 'left' }}>QR</th>
           </tr>
         </thead>
         <tbody>
@@ -143,6 +173,9 @@ function FarmerDashboard() {
               <td style={{ padding: 8 }}>{p.batchId}</td>
               <td style={{ padding: 8 }}>{p.currentStatus}</td>
               <td style={{ padding: 8 }}>{p.quantity} {p.unit}</td>
+              <td style={{ padding: 8 }}>
+                <button type="button" onClick={() => downloadProductQr(p)}>Download QR</button>
+              </td>
             </tr>
           ))}
         </tbody>

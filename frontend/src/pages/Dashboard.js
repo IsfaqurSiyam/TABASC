@@ -7,6 +7,7 @@ import DistributorDashboard from '../components/Distributor/DistributorDashboard
 import RetailerDashboard from '../components/Retailer/RetailerDashboard';
 import ConsumerDashboard from '../components/Consumer/ConsumerDashboard';
 import InspectorDashboard from '../components/Inspector/InspectorDashboard';
+import AdminDashboard from '../components/Admin/AdminDashboard';
 
 function Dashboard() {
   const { user, logout } = useAuth();
@@ -28,8 +29,9 @@ function Dashboard() {
       case 'consumer':
         return <ConsumerDashboard />;
       case 'inspector':
-      case 'admin':
         return <InspectorDashboard />;
+      case 'admin':
+        return <AdminDashboard />;
       default:
         return <p>Unknown role</p>;
     }
@@ -55,6 +57,12 @@ function Dashboard() {
       </header>
 
       <main className="dashboard-content">
+        {user.requestedRole && user.role === 'consumer' && (
+          <div className="approval-notice" role="status">
+            <strong>Role request pending:</strong> your request for {user.requestedRole} access is awaiting administrator approval.
+            You can use your consumer account while it is reviewed.
+          </div>
+        )}
         <div id="overview" className="dashboard-workspace">
           {renderRoleDashboard()}
         </div>

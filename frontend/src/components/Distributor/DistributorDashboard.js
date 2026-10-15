@@ -1,15 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import ReputationQRCode from '../Common/ReputationQRCode';
+import SupplyChainActions from '../Common/SupplyChainActions';
 
 function DistributorDashboard() {
   const [products, setProducts] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState('');
-  const [status, setStatus] = useState('PickedUp');
   const [location, setLocation] = useState('');
   const [notes, setNotes] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const selected = products.find((product) => product._id === selectedProduct);
+  const statusOrder = ['Harvested', 'PickedUp', 'InTransit', 'Delivered', 'OnShelf', 'Sold'];
+  const nextStatusIndex = selected ? statusOrder.indexOf(selected.currentStatus) + 1 : -1;
+  const nextStatus = nextStatusIndex > 0 && nextStatusIndex <= 3
+    ? statusOrder[nextStatusIndex]
+    : '';
+  const eligibleProducts = products.filter((product) => !product.isRecalled &&
+    ['Harvested', 'PickedUp', 'InTransit'].includes(product.currentStatus));
 
   const fetchProducts = async () => {
     try {
@@ -30,9 +38,10 @@ function DistributorDashboard() {
     setLoading(true);
     try {
       const product = products.find(p => p._id === selectedProduct);
+      if (!product || !nextStatus) throw new Error('Choose a product with a valid next status');
       const res = await axios.post(`${process.env.REACT_APP_API_URL}/tracking/update`, {
         blockchainId: product.blockchainId,
-        status,
+        status: nextStatus,
         location,
         notes
       });
@@ -80,7 +89,7 @@ function DistributorDashboard() {
           <select value={selectedProduct} onChange={(e) => setSelectedProduct(e.target.value)} required
             style={{ width: '100%', padding: 6 }}>
             <option value="">-- Select --</option>
-            {products.map(p => (
+            {eligibleProducts.map(p => (
               <option key={p._id} value={p._id}>{p.name} ({p.batchId})</option>
             ))}
           </select>
@@ -88,10 +97,8 @@ function DistributorDashboard() {
 
         <div style={{ marginBottom: 10 }}>
           <label>New Status</label><br />
-          <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: '100%', padding: 6 }}>
-            <option value="PickedUp">Picked Up</option>
-            <option value="InTransit">In Transit</option>
-            <option value="Delivered">Delivered</option>
+          <select value={nextStatus} disabled={!nextStatus} style={{ width: '100%', padding: 6 }}>
+            {nextStatus && <option value={nextStatus}>{nextStatus}</option>}
           </select>
         </div>
 
@@ -107,10 +114,12 @@ function DistributorDashboard() {
             style={{ width: '100%', padding: 6 }} />
         </div>
 
-        <button type="submit" disabled={loading} style={{ padding: '8px 16px' }}>
+        <button type="submit" disabled={loading || !selected || !nextStatus} style={{ padding: '8px 16px' }}>
           {loading ? 'Updating...' : 'Update Status'}
         </button>
       </form>
+
+      <SupplyChainActions products={products} role="distributor" onComplete={fetchProducts} />
 
       <div className="section-heading">
         <h3>All Products in System</h3>

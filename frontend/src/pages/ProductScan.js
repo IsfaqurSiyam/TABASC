@@ -68,12 +68,24 @@ function ProductScan() {
       <div className="public-hero">
         <h2 style={{ margin: 0 }}>TABASC Product Traceability</h2>
         <p style={{ margin: '4px 0 0', fontSize: 14 }}>Trust-Aware Blockchain Agricultural Supply Chain</p>
-        <span className="verification-badge">✓ Blockchain-backed product record</span>
+        <span className={product.verifiedOnChain ? 'verification-badge' : 'verification-warning'}>
+          {product.verifiedOnChain
+            ? '✓ Product data matches its on-chain record'
+            : 'Data mismatch: product details could not be verified'}
+        </span>
       </div>
 
       <div className="public-section">
         <h3 style={{ marginTop: 0 }}>{product.name}</h3>
         <span className="status-badge">{product.currentStatus}</span>
+        {product.isRecalled && (
+          <p className="error-message" role="alert">
+            This product has been recalled. Do not consume or distribute it.
+          </p>
+        )}
+        {product.expired && (
+          <p className="error-message" role="alert">This product is past its expiry date.</p>
+        )}
         {product.description && <p>{product.description}</p>}
         <div className="passport-grid">
           <div className="passport-item"><span>Batch ID</span><strong>{product.batchId}</strong></div>

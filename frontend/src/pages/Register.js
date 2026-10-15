@@ -7,8 +7,7 @@ function Register() {
     name: '',
     email: '',
     password: '',
-    role: 'farmer',
-    walletAddress: '',
+    requestedRole: '',
     phone: '',
     location: ''
   });
@@ -27,7 +26,9 @@ function Register() {
     setError('');
     setLoading(true);
     try {
-      await register(formData);
+      const registrationData = { ...formData };
+      if (!registrationData.requestedRole) delete registrationData.requestedRole;
+      await register(registrationData);
       navigate('/dashboard');
     } catch (err) {
       setError(err.response?.data?.message || 'Registration failed');
@@ -64,28 +65,27 @@ function Register() {
 
         <div style={{ marginBottom: 12 }}>
           <label>Password</label><br />
-          <input type="password" name="password" value={formData.password} onChange={handleChange} required
+          <input type="password" name="password" value={formData.password} onChange={handleChange} required minLength="8" pattern=".*\d.*" title="Use at least 8 characters and include a digit."
             style={{ width: '100%', padding: 8 }} />
         </div>
 
         <div style={{ marginBottom: 12 }}>
-          <label>Role</label><br />
-          <select name="role" value={formData.role} onChange={handleChange}
+          <label>Supply-chain role request (optional)</label><br />
+          <select name="requestedRole" value={formData.requestedRole} onChange={handleChange}
             style={{ width: '100%', padding: 8 }}>
+            <option value="">Consumer account only</option>
             <option value="farmer">Farmer</option>
             <option value="distributor">Distributor</option>
             <option value="retailer">Retailer</option>
-            <option value="consumer">Consumer</option>
             <option value="inspector">Inspector</option>
-            <option value="admin">Admin</option>
           </select>
         </div>
 
         <div style={{ marginBottom: 12 }}>
-          <label>Wallet Address (from Ganache){formData.role === 'farmer' ? ' (required)' : ''}</label><br />
-          <input name="walletAddress" value={formData.walletAddress} onChange={handleChange}
-            placeholder="0x..." required={formData.role === 'farmer'}
-            style={{ width: '100%', padding: 8 }} />
+          <p className="form-hint">
+            New accounts start as consumers. A supply-chain role request is reviewed by an administrator.
+            Your development wallet is generated and funded securely during registration.
+          </p>
         </div>
 
         <div style={{ marginBottom: 12 }}>

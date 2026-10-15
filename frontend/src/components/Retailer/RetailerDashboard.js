@@ -1,15 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import ReputationQRCode from '../Common/ReputationQRCode';
+import SupplyChainActions from '../Common/SupplyChainActions';
 
 function RetailerDashboard() {
   const [products, setProducts] = useState([]);
   const [selectedProduct, setSelectedProduct] = useState('');
-  const [status, setStatus] = useState('OnShelf');
   const [location, setLocation] = useState('');
   const [notes, setNotes] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const selected = products.find((product) => product._id === selectedProduct);
+  const nextStatus = selected?.currentStatus === 'Delivered'
+    ? 'OnShelf'
+    : selected?.currentStatus === 'OnShelf' ? 'Sold' : '';
+  const eligibleProducts = products.filter((product) => !product.isRecalled &&
+    !product.expired && ['Delivered', 'OnShelf'].includes(product.currentStatus));
 
   const fetchProducts = async () => {
     try {
@@ -30,9 +36,10 @@ function RetailerDashboard() {
     setLoading(true);
     try {
       const product = products.find(p => p._id === selectedProduct);
+      if (!product || !nextStatus) throw new Error('Choose a product with a valid next status');
       const res = await axios.post(`${process.env.REACT_APP_API_URL}/tracking/update`, {
         blockchainId: product.blockchainId,
-        status,
+        status: nextStatus,
         location,
         notes
       });
@@ -80,7 +87,7 @@ function RetailerDashboard() {
           <select value={selectedProduct} onChange={(e) => setSelectedProduct(e.target.value)} required
             style={{ width: '100%', padding: 6 }}>
             <option value="">-- Select --</option>
-            {products.map(p => (
+            {eligibleProducts.map(p => (
               <option key={p._id} value={p._id}>{p.name} ({p.batchId}) — {p.currentStatus}</option>
             ))}
           </select>
@@ -88,10 +95,8 @@ function RetailerDashboard() {
 
         <div style={{ marginBottom: 10 }}>
           <label>New Status</label><br />
-          <select value={status} onChange={(e) => setStatus(e.target.value)} style={{ width: '100%', padding: 6 }}>
-            <option value="Delivered">Delivered (Confirm Receipt)</option>
-            <option value="OnShelf">On Shelf</option>
-            <option value="Sold">Sold</option>
+          <select value={nextStatus} disabled={!nextStatus} style={{ width: '100%', padding: 6 }}>
+            {nextStatus && <option value={nextStatus}>{nextStatus}</option>}
           </select>
         </div>
 
@@ -107,10 +112,12 @@ function RetailerDashboard() {
             style={{ width: '100%', padding: 6 }} placeholder="e.g. minor bruising on 5% of batch" />
         </div>
 
-        <button type="submit" disabled={loading} style={{ padding: '8px 16px' }}>
+        <button type="submit" disabled={loading || !selected || !nextStatus} style={{ padding: '8px 16px' }}>
           {loading ? 'Updating...' : 'Update Status'}
         </button>
       </form>
+
+      <SupplyChainActions products={products} role="retailer" onComplete={fetchProducts} />
 
       <div className="section-heading">
         <h3>All Products</h3>
