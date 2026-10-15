@@ -13,9 +13,11 @@ package is required. It uses deterministic development-only accounts. Do not
 use the development mnemonic or these accounts for real funds.
 
 Copy `.env.example` to `client/.env` and replace the placeholder secrets and
-settings. The backend requires a JWT secret and wallet passphrase of at least
-32 characters, a valid local MongoDB URL, local Ganache URL, admin credentials,
-and the configured frontend origin.
+settings. Backend startup requires a JWT secret and wallet passphrase of at
+least 32 characters, a valid local MongoDB URL, local Ganache URL, a positive
+wallet funding amount, token expiry, and the configured frontend origin.
+`ADMIN_EMAIL` and `ADMIN_PASSWORD` are only required when explicitly running
+the administrator-seeding script.
 Before startup, confirm every key in `.env.example` is present in
 `client/.env`. Keep the wallet passphrase consistent with existing encrypted
 wallets; changing it can make those wallets unusable.

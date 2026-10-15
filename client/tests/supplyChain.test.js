@@ -7,14 +7,13 @@ process.env.PRODUCT_CONTRACT = '0x2222222222222222222222222222222222222222';
 process.env.TRACKING_CONTRACT = '0x3333333333333333333333333333333333333333';
 process.env.REPUTATION_CONTRACT = '0x4444444444444444444444444444444444444444';
 process.env.WALLET_PASSPHRASE = 'test-wallet-passphrase-of-at-least-thirty-two';
-process.env.ADMIN_EMAIL = 'admin@example.test';
-process.env.ADMIN_PASSWORD = 'password123';
 process.env.CORS_ORIGIN = 'http://localhost:3000';
 process.env.FUND_AMOUNT_ETH = '0.01';
 process.env.JWT_EXPIRES_IN = '2h';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { validateEnvironment } = require('../config/env');
 const {
   canonicalJson,
   canonicalProductFields,
@@ -22,6 +21,13 @@ const {
   isExpired,
   trackingHash
 } = require('../services/supplyChain');
+
+test('admin seeding credentials are optional for backend startup', () => {
+  const environment = { ...process.env };
+  delete environment.ADMIN_EMAIL;
+  delete environment.ADMIN_PASSWORD;
+  assert.doesNotThrow(() => validateEnvironment(environment));
+});
 
 const fixtureProduct = () => ({
   batchId: ' BATCH-01 ',

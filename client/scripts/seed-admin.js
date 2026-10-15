@@ -5,6 +5,9 @@ const connectDB = require('../config/db');
 const { RoleRegistryContract, getAccounts } = require('../blockchain/web3');
 
 const run = async () => {
+  if (!config.adminEmail || !config.adminPassword) {
+    throw new Error('ADMIN_EMAIL and ADMIN_PASSWORD are required to seed an administrator');
+  }
   await connectDB(config.mongoUri);
   try {
     const accounts = await getAccounts();
