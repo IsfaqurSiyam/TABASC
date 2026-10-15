@@ -357,8 +357,8 @@ router.get('/farmer/myproducts', protect, (req, res, next) => {
 router.get('/batch/:batchId', async (req, res, next) => {
   try {
     const product = await Product.findOne({ batchId: req.params.batchId })
-      .populate('farmer', 'name email location phone walletAddress')
-      .populate('currentOwner', 'name email role');
+      .populate('farmer', 'name location walletAddress')
+      .populate('currentOwner', 'name role');
     if (!product) {
       throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
     }

@@ -3,7 +3,16 @@ const mongoose = require('mongoose');
 const PendingSyncSchema = new mongoose.Schema({
   operation: {
     type: String,
-    enum: ['product_registered', 'shipment_updated', 'custody_transferred', 'buyer_recorded', 'product_recalled'],
+    enum: [
+      'product_registered',
+      'shipment_updated',
+      'custody_transferred',
+      'buyer_recorded',
+      'product_recalled',
+      'inspection_recorded',
+      'consumer_feedback',
+      'reputation_finalized'
+    ],
     required: true
   },
   blockchainId: {

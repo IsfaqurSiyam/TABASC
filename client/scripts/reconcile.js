@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Batch = require('../models/Batch');
+const ConsumerReview = require('../models/ConsumerReview');
 const PendingSync = require('../models/PendingSync');
 const Product = require('../models/Product');
 const ReconcileRun = require('../models/ReconcileRun');
@@ -36,7 +37,66 @@ const reconcilePending = async (pending) => {
   const { payload } = pending;
   let product;
 
-  if (pending.operation === 'product_registered') {
+  if (pending.operation === 'inspection_recorded') {
+    const batchUpdate = await Batch.updateOne(
+      { batchId: payload.batchId },
+      {
+        $set: {
+          inspector: payload.inspectorId,
+          qualityScore: payload.qualityScore,
+          complianceScore: payload.complianceScore,
+          inspectionStatus: 'inspected',
+          inspectionDate: pending.createdAt
+        }
+      }
+    );
+    if (batchUpdate.matchedCount !== 1) {
+      throw new Error(`Batch ${payload.batchId} is missing during inspection reconciliation`);
+    }
+  } else if (pending.operation === 'consumer_feedback') {
+    const batch = await Batch.findOne({ batchId: payload.batchId }).select('_id');
+    if (!batch) throw new Error(`Batch ${payload.batchId} is missing during feedback reconciliation`);
+    await ConsumerReview.updateOne(
+      { consumer: payload.consumerId, batch: batch._id },
+      {
+        $setOnInsert: {
+          consumer: payload.consumerId,
+          farmer: payload.farmerId,
+          batch: batch._id,
+          batchId: payload.batchId,
+          rating: payload.rating,
+          transactionHash: pending.txHash
+        }
+      },
+      { upsert: true }
+    );
+    const batchUpdate = await Batch.updateOne(
+      { _id: batch._id },
+      {
+        $set: {
+          feedbackScore: payload.rating,
+          complaintScore: 10 - payload.rating
+        }
+      }
+    );
+    if (batchUpdate.matchedCount !== 1) {
+      throw new Error(`Batch ${payload.batchId} disappeared during feedback reconciliation`);
+    }
+  } else if (pending.operation === 'reputation_finalized') {
+    const batchUpdate = await Batch.updateOne(
+      { batchId: payload.batchId },
+      {
+        $set: {
+          finalReputationScore: payload.finalScore,
+          trustLevel: payload.trustLevel,
+          reputationTxHash: pending.txHash
+        }
+      }
+    );
+    if (batchUpdate.matchedCount !== 1) {
+      throw new Error(`Batch ${payload.batchId} is missing during reputation reconciliation`);
+    }
+  } else if (pending.operation === 'product_registered') {
     if (!payload.product) {
       throw new Error(`Pending transaction ${pending.txHash} has no product payload`);
     }
@@ -95,7 +155,7 @@ const reconcilePending = async (pending) => {
     }
   }
 
-  await saveTrackingEvent(pending, product);
+  if (pending.payload.event) await saveTrackingEvent(pending, product);
   await PendingSync.updateOne(
     { _id: pending._id, status: 'pending' },
     {

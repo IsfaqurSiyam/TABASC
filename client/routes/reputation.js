@@ -1,335 +1,476 @@
-const express  = require('express');
-const router   = express.Router();
-const Batch    = require('../models/Batch');
-const User     = require('../models/User');
+const express = require('express');
+const Batch = require('../models/Batch');
 const ConsumerReview = require('../models/ConsumerReview');
+const Product = require('../models/Product');
+const User = require('../models/User');
 const { protect } = require('./auth');
+const { AppError } = require('../middleware/errors');
+const { validateRequest } = require('../middleware/requestValidation');
+const { sendFromWallet } = require('../blockchain/wallets');
 const {
-  web3,
+  ProductContract,
   ReputationContract,
-  getAccounts,
+  TrackingContract,
+  web3,
   getTransactionCost
 } = require('../blockchain/web3');
+const {
+  loadEncryptedWallet,
+  recordPendingSync
+} = require('../services/supplyChain');
 
-router.post('/reviews', protect, async (req, res) => {
+const router = express.Router();
+const scoreToBps = (value, field) => {
+  const score = Number(value);
+  if (!Number.isInteger(score) || score < 0 || score > 10) {
+    throw new AppError(400, 'INVALID_SCORE', `${field} must be an integer from 0 to 10`);
+  }
+  return score * 1000;
+};
+
+const asNumber = (tuple, field, index) =>
+  Number(tuple[field] === undefined ? tuple[index] : tuple[field]);
+
+const getProduct = async (batchId) => {
+  const product = await Product.findOne({ batchId, isActive: true });
+  if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
+  return product;
+};
+
+const getReviewStats = async (farmerId) => {
+  const [reviewCount, average] = await Promise.all([
+    ConsumerReview.countDocuments({ farmer: farmerId }),
+    ConsumerReview.aggregate([
+      { $match: { farmer: farmerId } },
+      { $group: { _id: null, average: { $avg: '$rating' } } }
+    ])
+  ]);
+  return {
+    reviewCount,
+    averageRating: average.length ? Number(average[0].average.toFixed(2)) : null
+  };
+};
+
+const pendingResponse = async (res, data) => {
+  const pending = await recordPendingSync(data);
+  return res.status(202).json({
+    message: 'Blockchain transaction succeeded; MongoDB synchronization is pending',
+    blockchainId: data.blockchainId,
+    txHash: data.txHash,
+    pendingSyncId: pending._id
+  });
+};
+
+router.get('/participants/:blockchainId', protect, async (req, res, next) => {
+  try {
+    if (req.user.role !== 'inspector') {
+      throw new AppError(403, 'FORBIDDEN', 'Only inspectors can view scoring participants');
+    }
+    const blockchainId = Number(req.params.blockchainId);
+    if (!/^\d+$/.test(req.params.blockchainId) ||
+        !Number.isSafeInteger(blockchainId) || blockchainId < 1) {
+      throw new AppError(400, 'INVALID_BLOCKCHAIN_ID', 'blockchainId must be a positive integer');
+    }
+    const product = await Product.findOne({ blockchainId, isActive: true });
+    if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
+
+    const candidateEntries = [
+      ['farmer', await ProductContract.methods.farmerOf(blockchainId).call()],
+      ['distributor', await TrackingContract.methods.actorOf(blockchainId, 1).call()],
+      ['retailer', await TrackingContract.methods.actorOf(blockchainId, 4).call()]
+    ];
+    const seen = new Set();
+    const participants = [];
+    for (const [role, walletAddress] of candidateEntries) {
+      const normalized = walletAddress.toLowerCase();
+      if (!/^0x[0-9a-f]{40}$/i.test(walletAddress) ||
+          normalized === `0x${'0'.repeat(40)}` || seen.has(normalized)) {
+        continue;
+      }
+      const isParticipant = await ReputationContract.methods
+        .isParticipant(blockchainId, walletAddress)
+        .call();
+      if (!isParticipant) continue;
+      seen.add(normalized);
+      const account = await User.findOne({
+        walletAddress: new RegExp(`^${normalized}$`, 'i')
+      }).select('name role');
+      participants.push({
+        walletAddress,
+        role,
+        name: account?.name || role
+      });
+    }
+    return res.json({ blockchainId, participants });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post('/score', protect, validateRequest({
+  body: {
+    batchId: { required: true, type: 'string', minLength: 1 },
+    stakeholderWallet: { required: true, type: 'string' },
+    qualityScore: { required: true, type: 'number', min: 0, max: 10 },
+    complianceScore: { required: true, type: 'number', min: 0, max: 10 }
+  }
+}), async (req, res, next) => {
+  try {
+    if (req.user.role !== 'inspector') {
+      throw new AppError(403, 'FORBIDDEN', 'Only inspectors can submit inspections');
+    }
+    if (!web3.utils.isAddress(req.body.stakeholderWallet)) {
+      throw new AppError(400, 'INVALID_WALLET', 'A valid participant wallet is required');
+    }
+    const product = await getProduct(req.body.batchId.trim());
+    const quality = scoreToBps(req.body.qualityScore, 'qualityScore');
+    const compliance = scoreToBps(req.body.complianceScore, 'complianceScore');
+    const inspection = await ReputationContract.methods
+      .getInspection(product.blockchainId)
+      .call();
+    let inspectionTxHash = null;
+
+    if (!(inspection.exists === true || inspection.exists === 'true' || inspection[4] === true || inspection[4] === 'true')) {
+      const method = ReputationContract.methods.recordInspection(
+        product.blockchainId,
+        quality,
+        compliance
+      );
+      const encryptedWallet = await loadEncryptedWallet(req.user._id);
+      const receipt = await sendFromWallet(encryptedWallet, {
+        to: ReputationContract.options.address,
+        data: method.encodeABI(),
+        gas: 350000
+      });
+      inspectionTxHash = receipt.transactionHash;
+      try {
+        const batchUpdate = await Batch.updateOne(
+          { batchId: product.batchId },
+          {
+            $set: {
+              inspector: req.user._id,
+              qualityScore: req.body.qualityScore,
+              complianceScore: req.body.complianceScore,
+              inspectionStatus: 'inspected',
+              inspectionDate: new Date()
+            }
+          }
+        );
+        if (batchUpdate.matchedCount !== 1) {
+          throw new Error('Batch record was not found during inspection synchronization');
+        }
+      } catch (databaseError) {
+        return pendingResponse(res, {
+          operation: 'inspection_recorded',
+          blockchainId: product.blockchainId,
+          txHash: inspectionTxHash,
+          payload: {
+            batchId: product.batchId,
+            inspectorId: String(req.user._id),
+            qualityScore: req.body.qualityScore,
+            complianceScore: req.body.complianceScore
+          }
+        });
+      }
+    } else {
+      const recordedQuality = asNumber(inspection, 'quality', 0);
+      const recordedCompliance = asNumber(inspection, 'compliance', 1);
+      if (recordedQuality !== quality || recordedCompliance !== compliance) {
+        throw new AppError(409, 'INSPECTION_IMMUTABLE', 'The recorded inspection scores cannot be changed');
+      }
+    }
+
+    const isParticipant = await ReputationContract.methods
+      .isParticipant(product.blockchainId, req.body.stakeholderWallet)
+      .call();
+    if (!(isParticipant === true || isParticipant === 'true')) {
+      throw new AppError(400, 'NOT_A_PARTICIPANT', 'The selected wallet did not participate in this product journey');
+    }
+    const existingHistory = await ReputationContract.methods
+      .getHistory(req.body.stakeholderWallet)
+      .call();
+    if (existingHistory.some((entry) => entry.batchId === product.batchId)) {
+      throw new AppError(409, 'SCORE_ALREADY_FINALIZED', 'This participant already has a finalized score for this product');
+    }
+
+    const finalize = ReputationContract.methods.finalizeScore(
+      product.blockchainId,
+      req.body.stakeholderWallet
+    );
+    const encryptedWallet = await loadEncryptedWallet(req.user._id);
+    const receipt = await sendFromWallet(encryptedWallet, {
+      to: ReputationContract.options.address,
+      data: finalize.encodeABI(),
+      gas: 400000
+    });
+    const [reputation, trustLevel] = await Promise.all([
+      ReputationContract.methods.getReputation(req.body.stakeholderWallet).call(),
+      ReputationContract.methods.getTrustLevel(req.body.stakeholderWallet).call()
+    ]);
+    const scoreBps = asNumber(reputation, 'scoreBps', 0);
+    const finalScore = Math.round(scoreBps / 10);
+    const totalBatches = asNumber(reputation, 'batches', 1);
+    let batchUpdate;
+    try {
+      batchUpdate = await Batch.updateOne(
+        { batchId: product.batchId },
+        {
+          $set: {
+            finalReputationScore: finalScore,
+            trustLevel,
+            reputationTxHash: receipt.transactionHash
+          }
+        }
+      );
+      if (batchUpdate.matchedCount !== 1) {
+        throw new Error('Batch record was not found during reputation synchronization');
+      }
+    } catch (databaseError) {
+      return pendingResponse(res, {
+        operation: 'reputation_finalized',
+        blockchainId: product.blockchainId,
+        txHash: receipt.transactionHash,
+        payload: {
+          batchId: product.batchId,
+          stakeholderWallet: req.body.stakeholderWallet,
+          finalScore,
+          scoreBps,
+          totalBatches,
+          trustLevel
+        }
+      });
+    }
+
+    let gas = null;
+    try {
+      gas = await getTransactionCost(receipt.transactionHash);
+    } catch (error) {
+      gas = null;
+    }
+    return res.json({
+      message: 'Inspection recorded and participant reputation finalized',
+      batchId: product.batchId,
+      stakeholderWallet: req.body.stakeholderWallet,
+      qualityScore: req.body.qualityScore,
+      complianceScore: req.body.complianceScore,
+      finalScore,
+      scoreBps,
+      totalBatches,
+      trustLevel,
+      inspectionTxHash,
+      txHash: receipt.transactionHash,
+      gas,
+      gasUnavailable: gas === null
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post('/reviews', protect, validateRequest({
+  body: {
+    batchId: { required: true, type: 'string', minLength: 1 },
+    rating: { required: true, type: 'number', min: 1, max: 10 }
+  }
+}), async (req, res, next) => {
   try {
     if (req.user.role !== 'consumer') {
-      return res.status(403).json({ message: 'Only consumers can submit reviews' });
+      throw new AppError(403, 'FORBIDDEN', 'Only consumers can submit product feedback');
     }
-
-    const batchId = typeof req.body.batchId === 'string'
-      ? req.body.batchId.trim()
-      : '';
-    const rating = Number(req.body.rating);
-    if (!batchId || !Number.isInteger(rating) || rating < 1 || rating > 10) {
-      return res.status(400).json({
-        message: 'Batch ID is required and rating must be an integer from 1 to 10'
-      });
+    if (!Number.isInteger(req.body.rating)) {
+      throw new AppError(400, 'INVALID_RATING', 'Rating must be an integer from 1 to 10');
     }
-
-    const batch = await Batch.findOne({ batchId });
-    if (!batch) {
-      return res.status(404).json({ message: 'Batch not found' });
-    }
-
-    const farmer = await User.findById(batch.farmer).select('walletAddress');
-    const farmerWallet = farmer?.walletAddress;
-    if (!web3.utils.isAddress(farmerWallet)) {
-      return res.status(400).json({
-        message: 'Farmer must register a valid wallet before receiving reviews'
-      });
-    }
-
-    let review;
-    try {
-      review = await ConsumerReview.create({
-        consumer: req.user._id,
-        farmer:   batch.farmer,
-        batch:    batch._id,
-        batchId:  batch.batchId,
-        rating
-      });
-    } catch (error) {
-      if (error.code === 11000) {
-        return res.status(409).json({
-          message: 'You have already reviewed this batch'
-        });
-      }
-      throw error;
-    }
-
-    let tx;
-    try {
-      const accounts = await getAccounts();
-      if (!accounts.length) {
-        throw new Error('No blockchain account is available to record the review');
-      }
-      tx = await ReputationContract.methods
-        .recordConsumerReview(
-          farmerWallet,
-          rating,
-          batch.batchId,
-          `${req.user._id}:${batch.batchId}`
-        )
-        .send({ from: accounts[0], gas: 400000 });
-    } catch (error) {
-      await ConsumerReview.deleteOne({ _id: review._id });
-      throw error;
-    }
-
-    await ConsumerReview.updateOne(
-      { _id: review._id },
-      { transactionHash: tx.transactionHash }
-    );
-
-    const score = await ReputationContract.methods
-      .getReputationScore(farmerWallet)
-      .call();
-    const trustLevel = await ReputationContract.methods
-      .getTrustLevel(farmerWallet)
-      .call();
-    const reviewCount = await ConsumerReview.countDocuments({ farmer: batch.farmer });
-    const averageRating = await ConsumerReview.aggregate([
-      { $match: { farmer: batch.farmer } },
-      { $group: { _id: null, average: { $avg: '$rating' } } }
+    const product = await getProduct(req.body.batchId.trim());
+    const [status, recalled] = await Promise.all([
+      TrackingContract.methods.getCurrentStatus(product.blockchainId).call(),
+      TrackingContract.methods.isRecalled(product.blockchainId).call()
     ]);
-
-    await Batch.findByIdAndUpdate(batch._id, {
-      feedbackScore:        Number(score.feedbackScore),
-      finalReputationScore: Number(score.finalScore),
-      trustLevel,
-      reputationTxHash:     tx.transactionHash
-    });
-
-    res.status(201).json({
-      message:       'Review recorded and farmer reputation updated',
-      batchId:       batch.batchId,
-      feedbackScore: Number(score.feedbackScore),
-      averageRating: Number(averageRating[0].average.toFixed(2)),
-      reviewCount,
-      finalScore:    Number(score.finalScore),
-      trustLevel,
-      txHash:        tx.transactionHash
-    });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// ── POST /api/reputation/score ─────────────────────────────────────────────
-// Inspector submits scores for a batch
-router.post('/score', protect, async (req, res) => {
-  try {
-    const {
-      batchId,
-      stakeholderWallet,
-      qualityScore,
-      deliveryScore,
-      complaintScore,
-      complianceScore,
-      feedbackScore
-    } = req.body;
-
-    // Only inspector or admin can submit scores
-    if (!['inspector', 'admin'].includes(req.user.role)) {
-      return res.status(403).json({
-        message: 'Only inspectors can submit reputation scores'
-      });
+    if (Number(status) !== 5) {
+      throw new AppError(409, 'PRODUCT_NOT_SOLD', 'Feedback can be submitted only for a sold product');
     }
-
-    // Validate scores 0-10
-    const scores = [
-      qualityScore, deliveryScore,
-      complaintScore, complianceScore, feedbackScore
-    ];
-    for (const score of scores) {
-      if (score < 0 || score > 10) {
-        return res.status(400).json({
-          message: 'All scores must be between 0 and 10'
-        });
-      }
+    if (recalled === true || recalled === 'true') {
+      throw new AppError(409, 'PRODUCT_RECALLED', 'Feedback cannot be submitted for a recalled product');
     }
-
-    // Find the batch
-    const batch = await Batch.findOne({ batchId });
-    if (!batch) {
-      return res.status(404).json({ message: 'Batch not found' });
+    let buyer;
+    try {
+      buyer = await TrackingContract.methods.buyerOf(product.blockchainId).call();
+    } catch {
+      throw new AppError(409, 'BUYER_NOT_RECORDED', 'The retailer has not recorded a buyer for this product');
     }
-
-    const accounts = await getAccounts();
-    const adminAccount = accounts[0];
-
-    // Call ReputationContract — MFSRS formula runs on-chain
-    const tx = await ReputationContract.methods
-      .calculateAndUpdateScore(
-        stakeholderWallet,
-        qualityScore,
-        deliveryScore,
-        complaintScore,
-        complianceScore,
-        feedbackScore,
-        batchId
-      )
-      .send({ from: adminAccount, gas: 400000 });
-    const gas = await getTransactionCost(tx.transactionHash);
-
-    const updatedScore = await ReputationContract.methods
-      .getReputationScore(stakeholderWallet)
+    if (buyer.toLowerCase() !== req.user.walletAddress.toLowerCase()) {
+      throw new AppError(403, 'NOT_RECORDED_BUYER', 'Only the recorded buyer can submit product feedback');
+    }
+    const existingFeedback = await ReputationContract.methods
+      .getFeedback(product.blockchainId)
       .call();
-    const finalScore = Number(updatedScore.finalScore);
-    const effectiveFeedbackScore = Number(updatedScore.feedbackScore);
-    const trustLevel = await ReputationContract.methods
-      .getTrustLevel(stakeholderWallet)
-      .call();
+    if (existingFeedback.exists === true || existingFeedback.exists === 'true' ||
+        existingFeedback[4] === true || existingFeedback[4] === 'true') {
+      throw new AppError(409, 'FEEDBACK_ALREADY_RECORDED', 'Feedback has already been submitted for this product');
+    }
 
-    // Update batch in MongoDB
-    await Batch.findOneAndUpdate(
-      { batchId },
-      {
-        inspector:            req.user._id,
-        qualityScore,
-        deliveryScore,
-        complaintScore,
-        complianceScore,
-        feedbackScore:        effectiveFeedbackScore,
-        finalReputationScore: finalScore,
-        trustLevel,
-        reputationTxHash:     tx.transactionHash,
-        inspectionStatus:     'inspected',
-        inspectionDate:       new Date()
-      },
-      { new: true }
+    const satisfaction = req.body.rating * 1000;
+    const complaint = (10 - req.body.rating) * 1000;
+    const method = ReputationContract.methods.submitFeedback(
+      product.blockchainId,
+      complaint,
+      satisfaction
     );
-
-    res.json({
-      message:     'Reputation score submitted successfully',
-      batchId,
-      scores: {
-        quality:    qualityScore,
-        delivery:   deliveryScore,
-        complaint:  complaintScore,
-        compliance: complianceScore,
-        feedback:   effectiveFeedbackScore
-      },
-      finalScore,
-      trustLevel,
-      txHash: tx.transactionHash,
-      gas
+    const encryptedWallet = await loadEncryptedWallet(req.user._id);
+    const receipt = await sendFromWallet(encryptedWallet, {
+      to: ReputationContract.options.address,
+      data: method.encodeABI(),
+      gas: 300000
     });
 
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// ── GET /api/reputation/:wallet ────────────────────────────────────────────
-// Get reputation score for a stakeholder by wallet address
-router.get('/:wallet', async (req, res) => {
-  try {
-    if (!web3.utils.isAddress(req.params.wallet)) {
-      return res.status(400).json({ message: 'Invalid wallet address' });
-    }
-
-    const storedScore = await ReputationContract.methods
-      .reputationScores(req.params.wallet)
-      .call();
-
-    const scoreExists = Array.isArray(storedScore)
-      ? storedScore[8]
-      : storedScore.exists;
-
-    if (scoreExists !== true && scoreExists !== 'true') {
-      return res.status(404).json({
-        message: 'No reputation record found for this wallet'
+    try {
+      const batch = await Batch.findOne({ batchId: product.batchId }).select('_id');
+      if (!batch) throw new Error('Batch record was not found during feedback synchronization');
+      await ConsumerReview.updateOne(
+        { consumer: req.user._id, batch: batch._id },
+        {
+          $setOnInsert: {
+            consumer: req.user._id,
+            farmer: product.farmer,
+            batch: batch._id,
+            batchId: product.batchId,
+            rating: req.body.rating,
+            transactionHash: receipt.transactionHash
+          }
+        },
+        { upsert: true }
+      );
+      const batchUpdate = await Batch.updateOne(
+        { batchId: product.batchId },
+        {
+          $set: {
+            feedbackScore: req.body.rating,
+            complaintScore: 10 - req.body.rating
+          }
+        }
+      );
+      if (batchUpdate.matchedCount !== 1) {
+        throw new Error('Batch record was not found during feedback synchronization');
+      }
+    } catch (databaseError) {
+      return pendingResponse(res, {
+        operation: 'consumer_feedback',
+        blockchainId: product.blockchainId,
+        txHash: receipt.transactionHash,
+        payload: {
+          batchId: product.batchId,
+          consumerId: String(req.user._id),
+          farmerId: String(product.farmer),
+          rating: req.body.rating
+        }
       });
     }
 
-    const score = await ReputationContract.methods
-      .getReputationScore(req.params.wallet)
-      .call();
-
-    const trustLevel = await ReputationContract.methods
-      .getTrustLevel(req.params.wallet)
-      .call();
-
-    const historyCount = await ReputationContract.methods
-      .getHistoryCount(req.params.wallet)
-      .call();
-
-    // Get full history
-    const history = [];
-    for (let i = 0; i < Number(historyCount); i++) {
-      const entry = await ReputationContract.methods
-        .getHistoryEntry(req.params.wallet, i)
-        .call();
-
-      history.push({
-       finalScore: Number(entry.finalScore),
-        batchId:    entry.batchId,
-        timestamp:  new Date(Number(entry.timestamp) * 1000)
-          .toLocaleString()
-      });
+    const { reviewCount, averageRating } = await getReviewStats(product.farmer);
+    let gas = null;
+    try {
+      gas = await getTransactionCost(receipt.transactionHash);
+    } catch (error) {
+      gas = null;
     }
-
-    res.json({
-      wallet: req.params.wallet,
-      scores: {
-        quality:    Number(score.qualityScore),
-        delivery:   Number(score.deliveryScore),
-        complaint:  Number(score.complaintScore),
-        compliance: Number(score.complianceScore),
-        feedback:   Number(score.feedbackScore)
-      },
-      finalScore:   Number(score.finalScore),
-      trustLevel,
-      totalBatches: Number(score.totalBatches),
-      lastUpdated:  new Date(Number(score.lastUpdated) * 1000)
-        .toLocaleString(),
-      history
+    return res.status(201).json({
+      message: 'Product feedback recorded on-chain',
+      batchId: product.batchId,
+      rating: req.body.rating,
+      averageRating,
+      reviewCount,
+      txHash: receipt.transactionHash,
+      gas,
+      gasUnavailable: gas === null
     });
-
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    return next(error);
   }
 });
 
-// ── GET /api/reputation/batch/:batchId ────────────────────────────────────
-
-// ── GET /api/reputation/batch/:batchId ────────────────────────────────────
-// Get reputation scores for a specific batch
-router.get('/batch/:batchId', protect, async (req, res) => {
+router.get('/batch/:batchId', protect, async (req, res, next) => {
   try {
     const batch = await Batch.findOne({ batchId: req.params.batchId })
-      .populate('farmer',    'name email')
+      .populate('farmer', 'name email')
       .populate('inspector', 'name email');
-
-    if (!batch) {
-      return res.status(404).json({ message: 'Batch not found' });
-    }
-
-    res.json(batch);
-
+    if (!batch) throw new AppError(404, 'BATCH_NOT_FOUND', 'Batch not found');
+    return res.json(batch);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    return next(error);
   }
 });
 
-// ── GET /api/reputation/leaderboard/top ───────────────────────────────────
-// Get top rated stakeholders from MongoDB
-router.get('/leaderboard/top', async (req, res) => {
+router.get('/leaderboard/top', async (req, res, next) => {
   try {
     const topBatches = await Batch.find({
-      inspectionStatus:     'inspected',
+      inspectionStatus: 'inspected',
       finalReputationScore: { $exists: true }
     })
       .populate('farmer', 'name email location')
       .sort({ finalReputationScore: -1 })
       .limit(10);
-
-    res.json(topBatches);
-
+    return res.json(topBatches);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    return next(error);
+  }
+});
+
+router.get('/:wallet', async (req, res, next) => {
+  try {
+    if (!web3.utils.isAddress(req.params.wallet)) {
+      throw new AppError(400, 'INVALID_WALLET', 'Invalid wallet address');
+    }
+    const [reputation, trustLevel, history] = await Promise.all([
+      ReputationContract.methods.getReputation(req.params.wallet).call(),
+      ReputationContract.methods.getTrustLevel(req.params.wallet).call(),
+      ReputationContract.methods.getHistory(req.params.wallet).call()
+    ]);
+    const scoreBps = asNumber(reputation, 'scoreBps', 0);
+    const batches = asNumber(reputation, 'batches', 1);
+    const exists = reputation.exists === true || reputation.exists === 'true' ||
+      reputation[2] === true || reputation[2] === 'true';
+    if (!exists) {
+      throw new AppError(404, 'REPUTATION_NOT_FOUND', 'No reputation record found for this wallet');
+    }
+    const batchHistory = await Batch.find({
+      batchId: { $in: history.map((entry) => entry.batchId) }
+    }).select('batchId qualityScore deliveryScore complaintScore complianceScore feedbackScore');
+    const scoresByBatch = new Map(batchHistory.map((batch) => [batch.batchId, batch]));
+
+    return res.json({
+      wallet: req.params.wallet,
+      scores: {
+        quality: null,
+        delivery: null,
+        complaint: null,
+        compliance: null,
+        feedback: null
+      },
+      finalScore: Math.round(scoreBps / 10),
+      scoreBps,
+      trustLevel,
+      totalBatches: batches,
+      lastUpdated: history.length
+        ? new Date(Number(history[history.length - 1].timestamp) * 1000).toLocaleString()
+        : null,
+      history: history.map((entry) => {
+        const batch = scoresByBatch.get(entry.batchId);
+        return {
+          finalScore: Math.round(Number(entry.scoreBps) / 10),
+          scoreBps: Number(entry.scoreBps),
+          batchId: entry.batchId,
+          timestamp: new Date(Number(entry.timestamp) * 1000).toLocaleString(),
+          scores: batch ? {
+            quality: batch.qualityScore,
+            delivery: batch.deliveryScore,
+            complaint: batch.complaintScore,
+            compliance: batch.complianceScore,
+            feedback: batch.feedbackScore
+          } : null
+        };
+      })
+    });
+  } catch (error) {
+    return next(error);
   }
 });
 

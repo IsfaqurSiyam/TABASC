@@ -41,7 +41,9 @@ function FarmerDashboard() {
         quantity: Number(formData.quantity),
         deliveryWindow: Number(formData.deliveryWindow)
       });
-      setMessage(`Product registered! Blockchain ID: ${res.data.blockchainId}`);
+      setMessage(res.status === 202
+        ? `${res.data.message} Transaction: ${res.data.txHash}`
+        : `Product registered! Blockchain ID: ${res.data.blockchainId}`);
       setShowForm(false);
       setFormData({
         name: '', description: '', batchId: '',

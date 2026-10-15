@@ -30,7 +30,11 @@ Verify a registered product's canonical data hash with
 MongoDB write fails, the API records a pending sync and returns `202`; rerun
 `npm run reconcile --prefix client` to safely retry those writes. The latest
 reconciliation result and remaining pending-sync count are available from the
-admin overview.
+admin overview. Inspector scoring records immutable quality and compliance
+values on-chain, then finalizes a score only for an actual journey participant.
+Consumer feedback is accepted only from the wallet recorded as the buyer of a
+sold, non-recalled product. Reputation writes with pending database
+synchronization return `202` and are retried by the same reconciliation command.
 
 Create the first administrator with `npm run seed:admin --prefix client`.
 After a contract redeployment, restore approved on-chain roles with
