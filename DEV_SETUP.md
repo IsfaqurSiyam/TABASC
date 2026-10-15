@@ -16,6 +16,9 @@ Copy `.env.example` to `client/.env` and replace the placeholder secrets and
 settings. The backend requires a JWT secret and wallet passphrase of at least
 32 characters, a valid local MongoDB URL, local Ganache URL, admin credentials,
 and the configured frontend origin.
+Before startup, confirm every key in `.env.example` is present in
+`client/.env`. Keep the wallet passphrase consistent with existing encrypted
+wallets; changing it can make those wallets unusable.
 
 After migrating contracts, run `npm run sync:env --prefix client` to update the
 deployed contract addresses in `client/.env`. The script preserves other
@@ -30,6 +33,12 @@ URL is `http://localhost:5000/api`. Set `VITE_API_URL` in `frontend/.env` when
 the backend uses a different URL. Run frontend tests with
 `npm test --prefix frontend` and create a production bundle with
 `npm run build --prefix frontend`.
+
+Before release, run `npm test --prefix client`, `npm run contracts:test
+--prefix client`, `npm test --prefix frontend`, and
+`npm run build --prefix frontend`. Check runtime readiness with
+`GET /api/health`; it reports database, chain, deployed-contract, and pending
+synchronization status without changing application data.
 
 Verify a registered product's canonical data hash with
 `GET /api/verify/<blockchainId>`. If a blockchain transaction succeeds but its
