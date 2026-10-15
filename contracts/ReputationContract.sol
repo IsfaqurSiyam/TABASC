@@ -1,320 +1,408 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
+interface IReputationRoleRegistry {
+    function hasRole(bytes32 role, address account) external view returns (bool);
+    function INSPECTOR_ROLE() external view returns (bytes32);
+    function isAdmin(address account) external view returns (bool);
+}
+
+interface IReputationProduct {
+    function exists(uint256 productId) external view returns (bool);
+    function farmerOf(uint256 productId) external view returns (address);
+    function registeredAtOf(uint256 productId) external view returns (uint256);
+    function deliveryWindowOf(uint256 productId) external view returns (uint256);
+    function batchIdOf(uint256 productId) external view returns (string memory);
+}
+
+interface IReputationTracking {
+    enum Status {
+        Harvested,
+        PickedUp,
+        InTransit,
+        Delivered,
+        OnShelf,
+        Sold
+    }
+
+    function getCurrentStatus(uint256 productId) external view returns (Status);
+    function actorOf(uint256 productId, Status status) external view returns (address);
+    function actedAtOf(uint256 productId, Status status) external view returns (uint256);
+    function buyerOf(uint256 productId) external view returns (address);
+}
+
+/// @title ReputationContract
+/// @notice Computes inspectable batch scores and exponentially accumulated
+/// stakeholder reputations in basis points.
 contract ReputationContract {
+    struct Inspection {
+        uint16 quality;
+        uint16 compliance;
+        address inspector;
+        uint256 timestamp;
+        bool exists;
+    }
 
-    // ── Data structures ───────────────────────────────────────────────────
+    struct Feedback {
+        uint16 complaint;
+        uint16 satisfaction;
+        address buyer;
+        uint256 timestamp;
+        bool exists;
+    }
 
-    // Scores are 0-10, stored as integers
-    // We multiply by 100 internally to avoid decimals
-    // Final RS is out of 1000 (10 * 100)
-    struct ReputationScore {
-        uint8   qualityScore;       // Q  - Inspector score 0-10
-        uint8   deliveryScore;      // D  - 0-10
-        uint8   complaintScore;     // CH - 0-10 (10 = no complaints)
-        uint8   complianceScore;    // RC - 0-10
-        uint8   feedbackScore;      // CF - Consumer score 0-10
-        uint256 finalScore;         // RS result (0-1000)
-        uint256 lastUpdated;
-        uint256 totalBatches;
-        bool    exists;
+    struct Reputation {
+        uint256 scoreBps;
+        uint256 batches;
+        bool exists;
     }
 
     struct ScoreHistory {
-        uint256 finalScore;
+        uint256 scoreBps;
         uint256 timestamp;
-        string  batchId;
+        string batchId;
     }
 
-    // ── State variables ───────────────────────────────────────────────────
-    mapping(address => ReputationScore) public reputationScores;
-    mapping(address => ScoreHistory[])  public scoreHistory;
-    mapping(address => bool)            public inspectors;
-    mapping(address => uint256) private consumerFeedbackTotal;
-    mapping(address => uint256) private consumerFeedbackCount;
-    mapping(address => mapping(bytes32 => bool)) private processedReviews;
-    mapping(address => mapping(bytes32 => bool)) private countedBatches;
+    IReputationRoleRegistry public immutable registry;
+    IReputationProduct public immutable product;
+    IReputationTracking public immutable tracking;
 
-    address public admin;
+    uint256[5] private _weights = [uint256(3000), 2500, 2000, 1500, 1000];
+    uint256 private _alpha = 3000;
+    uint256[4] private _thresholds = [uint256(2000), 4000, 6000, 8000];
 
-    // ── Events ────────────────────────────────────────────────────────────
-    event ReputationUpdated(
-        address indexed stakeholder,
-        uint256 finalScore,
-        string  batchId,
+    mapping(uint256 => Inspection) private _inspections;
+    mapping(uint256 => Feedback) private _feedback;
+    mapping(address => Reputation) private _reputations;
+    mapping(address => ScoreHistory[]) private _history;
+    mapping(uint256 => mapping(address => bool)) private _finalized;
+
+    error Unauthorized();
+    error InvalidAddress();
+    error ProductNotFound();
+    error InvalidScore();
+    error AlreadyInspected();
+    error InspectionRequired();
+    error ProductNotSold();
+    error NotBuyer();
+    error AlreadyReviewed();
+    error NonParticipant();
+    error AlreadyFinalized();
+    error InvalidWeights();
+    error InvalidAlpha();
+    error InvalidThresholds();
+    error DeliveryNotAvailable();
+    error InvalidDeliveryWindow();
+
+    event InspectionRecorded(
+        uint256 indexed productId,
+        address indexed inspector,
+        uint16 quality,
+        uint16 compliance,
         uint256 timestamp
     );
+    event FeedbackSubmitted(
+        uint256 indexed productId,
+        address indexed buyer,
+        uint16 complaint,
+        uint16 satisfaction,
+        uint256 timestamp
+    );
+    event ReputationFinalized(
+        uint256 indexed productId,
+        address indexed stakeholder,
+        uint256 batchScore,
+        uint256 scoreBps,
+        uint256 batches,
+        uint256 timestamp
+    );
+    event WeightsUpdated(uint256[5] weights);
+    event AlphaUpdated(uint256 alpha);
+    event ThresholdsUpdated(uint256[4] thresholds);
 
-    event InspectorAdded(address indexed inspector);
-    event InspectorRemoved(address indexed inspector);
-
-    // ── Modifiers ─────────────────────────────────────────────────────────
-    modifier onlyAdmin() {
-        require(msg.sender == admin, "Only admin can call this");
-        _;
+    /// @notice Connects reputation scoring to the registry, product and journey.
+    constructor(address registryAddress, address productAddress, address trackingAddress) {
+        if (
+            registryAddress == address(0) ||
+            productAddress == address(0) ||
+            trackingAddress == address(0)
+        ) revert InvalidAddress();
+        registry = IReputationRoleRegistry(registryAddress);
+        product = IReputationProduct(productAddress);
+        tracking = IReputationTracking(trackingAddress);
     }
 
-    modifier onlyInspector() {
-        require(
-            inspectors[msg.sender] || msg.sender == admin,
-            "Only inspector can call this"
-        );
-        _;
-    }
+    /// @notice Records an inspector's quality and compliance ratings once.
+    function recordInspection(uint256 productId, uint16 quality, uint16 compliance) external {
+        _requireProduct(productId);
+        _requireInspector();
+        if (quality > 10000 || compliance > 10000) revert InvalidScore();
+        if (_inspections[productId].exists) revert AlreadyInspected();
 
-    // ── Constructor ───────────────────────────────────────────────────────
-    constructor() {
-        admin = msg.sender;
-        inspectors[msg.sender] = true;
-    }
-
-    // ── Admin functions ───────────────────────────────────────────────────
-    function addInspector(address _inspector) public onlyAdmin {
-        inspectors[_inspector] = true;
-        emit InspectorAdded(_inspector);
-    }
-
-    function removeInspector(address _inspector) public onlyAdmin {
-        inspectors[_inspector] = false;
-        emit InspectorRemoved(_inspector);
-    }
-
-    // ── Core MFSRS function ───────────────────────────────────────────────
-    // Called by inspector after each batch
-    // All scores 0-10
-    function calculateAndUpdateScore(
-        address _stakeholder,
-        uint8   _qualityScore,
-        uint8   _deliveryScore,
-        uint8   _complaintScore,
-        uint8   _complianceScore,
-        uint8   _feedbackScore,
-        string memory _batchId
-    ) public onlyInspector {
-
-        // Validate all scores are 0-10
-        require(_qualityScore    <= 10, "Quality score must be 0-10");
-        require(_deliveryScore   <= 10, "Delivery score must be 0-10");
-        require(_complaintScore  <= 10, "Complaint score must be 0-10");
-        require(_complianceScore <= 10, "Compliance score must be 0-10");
-        require(_feedbackScore   <= 10, "Feedback score must be 0-10");
-
-        // ── MFSRS Formula ─────────────────────────────────────────────
-        // RS = (Q×0.30) + (D×0.25) + (CH×0.20) + (RC×0.15) + (CF×0.10)
-        // Multiply weights by 100 to avoid decimals:
-        // RS = (Q×30 + D×25 + CH×20 + RC×15 + CF×10) / 100
-        // Result is out of 1000 (max score when all = 10)
-        uint8 effectiveFeedbackScore = _getFeedbackScore(
-            _stakeholder,
-            _feedbackScore
-        );
-        uint256 rs = _calculateFinalScore(
-            _qualityScore,
-            _deliveryScore,
-            _complaintScore,
-            _complianceScore,
-            effectiveFeedbackScore
-        );
-
-        // Store the score
-        reputationScores[_stakeholder] = ReputationScore({
-            qualityScore:    _qualityScore,
-            deliveryScore:   _deliveryScore,
-            complaintScore:  _complaintScore,
-            complianceScore: _complianceScore,
-            feedbackScore:   effectiveFeedbackScore,
-            finalScore:      rs,
-            lastUpdated:     block.timestamp,
-            totalBatches:    _countBatch(_stakeholder, _batchId),
-            exists:          true
-        });
-
-        // Store in history
-        scoreHistory[_stakeholder].push(ScoreHistory({
-            finalScore: rs,
-            timestamp:  block.timestamp,
-            batchId:    _batchId
-        }));
-
-        emit ReputationUpdated(
-            _stakeholder,
-            rs,
-            _batchId,
-            block.timestamp
-        );
-    }
-
-    function recordConsumerReview(
-        address _stakeholder,
-        uint8 _rating,
-        string memory _batchId,
-        string memory _reviewKey
-    ) public onlyInspector {
-        require(_rating >= 1 && _rating <= 10, "Rating must be 1-10");
-        require(bytes(_reviewKey).length > 0, "Review key is required");
-
-        bytes32 reviewHash = keccak256(bytes(_reviewKey));
-        require(!processedReviews[_stakeholder][reviewHash], "Review already recorded");
-        processedReviews[_stakeholder][reviewHash] = true;
-
-        consumerFeedbackTotal[_stakeholder] += _rating;
-        consumerFeedbackCount[_stakeholder] += 1;
-        uint8 feedbackScore = _getFeedbackScore(_stakeholder, 5);
-
-        ReputationScore storage current = reputationScores[_stakeholder];
-        uint8 qualityScore = current.exists ? current.qualityScore : 5;
-        uint8 deliveryScore = current.exists ? current.deliveryScore : 5;
-        uint8 complaintScore = current.exists ? current.complaintScore : 5;
-        uint8 complianceScore = current.exists ? current.complianceScore : 5;
-        uint256 finalScore = _calculateFinalScore(
-            qualityScore,
-            deliveryScore,
-            complaintScore,
-            complianceScore,
-            feedbackScore
-        );
-
-        reputationScores[_stakeholder] = ReputationScore({
-            qualityScore:    qualityScore,
-            deliveryScore:   deliveryScore,
-            complaintScore:  complaintScore,
-            complianceScore: complianceScore,
-            feedbackScore:   feedbackScore,
-            finalScore:      finalScore,
-            lastUpdated:     block.timestamp,
-            totalBatches:    _countBatch(_stakeholder, _batchId),
-            exists:          true
-        });
-
-        scoreHistory[_stakeholder].push(ScoreHistory({
-            finalScore: finalScore,
+        _inspections[productId] = Inspection({
+            quality: quality,
+            compliance: compliance,
+            inspector: msg.sender,
             timestamp: block.timestamp,
-            batchId: _batchId
-        }));
+            exists: true
+        });
+        emit InspectionRecorded(productId, msg.sender, quality, compliance, block.timestamp);
+    }
 
-        emit ReputationUpdated(
-            _stakeholder,
-            finalScore,
-            _batchId,
+    /// @notice Records feedback from the buyer already recorded for a sold product.
+    function submitFeedback(uint256 productId, uint16 complaint, uint16 satisfaction) external {
+        _requireProduct(productId);
+        if (tracking.getCurrentStatus(productId) != IReputationTracking.Status.Sold) {
+            revert ProductNotSold();
+        }
+        if (tracking.buyerOf(productId) != msg.sender) revert NotBuyer();
+        if (complaint > 10000 || satisfaction > 10000) revert InvalidScore();
+        if (_feedback[productId].exists) revert AlreadyReviewed();
+
+        _feedback[productId] = Feedback({
+            complaint: complaint,
+            satisfaction: satisfaction,
+            buyer: msg.sender,
+            timestamp: block.timestamp,
+            exists: true
+        });
+        emit FeedbackSubmitted(productId, msg.sender, complaint, satisfaction, block.timestamp);
+    }
+
+    /// @notice Finalizes one inspected batch for one of its supply-chain participants.
+    function finalizeScore(uint256 productId, address stakeholder) external returns (uint256 scoreBps) {
+        _requireProduct(productId);
+        _requireInspector();
+        if (!_inspections[productId].exists) revert InspectionRequired();
+        if (!isParticipant(productId, stakeholder)) revert NonParticipant();
+        if (_finalized[productId][stakeholder]) revert AlreadyFinalized();
+
+        Inspection storage inspection = _inspections[productId];
+        Feedback storage feedback = _feedback[productId];
+        bool hasDelivery =
+            uint8(tracking.getCurrentStatus(productId)) >= uint8(IReputationTracking.Status.Delivered);
+        uint256[5] memory values;
+        bool[5] memory available = [true, hasDelivery, feedback.exists, true, feedback.exists];
+        values[0] = inspection.quality;
+        values[1] = hasDelivery ? deliveryScoreOf(productId) : 0;
+        values[2] = feedback.exists ? feedback.complaint : 0;
+        values[3] = inspection.compliance;
+        values[4] = feedback.exists ? feedback.satisfaction : 0;
+        uint256 batchScore = combine(values, _weights, available);
+
+        Reputation storage current = _reputations[stakeholder];
+        if (current.exists) {
+            scoreBps = (current.scoreBps * (10000 - _alpha) + batchScore * _alpha) / 10000;
+        } else {
+            scoreBps = batchScore;
+            current.exists = true;
+        }
+
+        current.scoreBps = scoreBps;
+        current.batches += 1;
+        _finalized[productId][stakeholder] = true;
+        string memory batchId = product.batchIdOf(productId);
+        _history[stakeholder].push(
+            ScoreHistory({scoreBps: scoreBps, timestamp: block.timestamp, batchId: batchId})
+        );
+        emit ReputationFinalized(
+            productId,
+            stakeholder,
+            batchScore,
+            scoreBps,
+            current.batches,
             block.timestamp
         );
     }
 
-    function _getFeedbackScore(address _stakeholder, uint8 _fallback)
-        private
+    /// @notice Returns the accumulated basis-point score, batch count and existence flag.
+    function getReputation(address stakeholder)
+        external
         view
-        returns (uint8)
+        returns (uint256 scoreBps, uint256 batches, bool exists)
     {
-        uint256 count = consumerFeedbackCount[_stakeholder];
-        if (count == 0) return _fallback;
-        return uint8((consumerFeedbackTotal[_stakeholder] + count / 2) / count);
+        Reputation storage reputation = _reputations[stakeholder];
+        return (reputation.scoreBps, reputation.batches, reputation.exists);
     }
 
-    function _countBatch(address _stakeholder, string memory _batchId)
-        private
-        returns (uint256 totalBatches)
-    {
-        totalBatches = reputationScores[_stakeholder].totalBatches;
-        bytes32 batchHash = keccak256(bytes(_batchId));
-        if (!countedBatches[_stakeholder][batchHash]) {
-            countedBatches[_stakeholder][batchHash] = true;
-            totalBatches += 1;
-        }
+    /// @notice Returns the configured trust level for a stakeholder.
+    function getTrustLevel(address stakeholder) external view returns (string memory) {
+        Reputation storage reputation = _reputations[stakeholder];
+        if (!reputation.exists) return "Unrated";
+        return trustLevelForScore(reputation.scoreBps);
     }
 
-    function _calculateFinalScore(
-        uint8 _qualityScore,
-        uint8 _deliveryScore,
-        uint8 _complaintScore,
-        uint8 _complianceScore,
-        uint8 _feedbackScore
-    ) private pure returns (uint256) {
-        return
-            (uint256(_qualityScore) * 30) +
-            (uint256(_deliveryScore) * 25) +
-            (uint256(_complaintScore) * 20) +
-            (uint256(_complianceScore) * 15) +
-            (uint256(_feedbackScore) * 10);
+    /// @notice Returns the score history, with one entry per finalized batch.
+    function getHistory(address stakeholder) external view returns (ScoreHistory[] memory) {
+        return _history[stakeholder];
     }
 
-    // ── View functions ────────────────────────────────────────────────────
-
-    // Get current reputation score of a stakeholder
-    function getReputationScore(address _stakeholder)
-        public
+    /// @notice Returns the inspection record for a batch.
+    function getInspection(uint256 productId)
+        external
         view
-        returns (
-            uint8   qualityScore,
-            uint8   deliveryScore,
-            uint8   complaintScore,
-            uint8   complianceScore,
-            uint8   feedbackScore,
-            uint256 finalScore,
-            uint256 lastUpdated,
-            uint256 totalBatches
-        )
+        returns (uint16 quality, uint16 compliance, address inspector, uint256 timestamp, bool exists)
     {
-        require(
-            reputationScores[_stakeholder].exists,
-            "No reputation record found"
-        );
-        ReputationScore memory r = reputationScores[_stakeholder];
+        _requireProduct(productId);
+        Inspection storage inspection = _inspections[productId];
         return (
-            r.qualityScore,
-            r.deliveryScore,
-            r.complaintScore,
-            r.complianceScore,
-            r.feedbackScore,
-            r.finalScore,
-            r.lastUpdated,
-            r.totalBatches
+            inspection.quality,
+            inspection.compliance,
+            inspection.inspector,
+            inspection.timestamp,
+            inspection.exists
         );
     }
 
-    // Get trust level label based on score
-    // Score is out of 1000
-    function getTrustLevel(address _stakeholder)
-        public
+    /// @notice Returns the consumer feedback record for a batch.
+    function getFeedback(uint256 productId)
+        external
         view
-        returns (string memory)
+        returns (uint16 complaint, uint16 satisfaction, address buyer, uint256 timestamp, bool exists)
     {
-        require(
-            reputationScores[_stakeholder].exists,
-            "No reputation record found"
+        _requireProduct(productId);
+        Feedback storage feedback = _feedback[productId];
+        return (
+            feedback.complaint,
+            feedback.satisfaction,
+            feedback.buyer,
+            feedback.timestamp,
+            feedback.exists
         );
-        uint256 score = reputationScores[_stakeholder].finalScore;
-
-        if (score >= 800)      return "Excellent";
-        else if (score >= 600) return "Good";
-        else if (score >= 400) return "Average";
-        else if (score >= 200) return "Poor";
-        else                   return "Critical";
     }
 
-    // Get score history count
-    function getHistoryCount(address _stakeholder)
+    /// @notice Returns whether the address participated in this product's journey.
+    function isParticipant(uint256 productId, address stakeholder) public view returns (bool) {
+        _requireProduct(productId);
+        return
+            stakeholder == product.farmerOf(productId) ||
+            stakeholder == tracking.actorOf(productId, IReputationTracking.Status.PickedUp) ||
+            stakeholder == tracking.actorOf(productId, IReputationTracking.Status.OnShelf);
+    }
+
+    /// @notice Computes delivery quality from registration and delivery timestamps.
+    function deliveryScoreOf(uint256 productId) public view returns (uint256) {
+        _requireProduct(productId);
+        if (
+            uint8(tracking.getCurrentStatus(productId)) <
+            uint8(IReputationTracking.Status.Delivered)
+        ) revert DeliveryNotAvailable();
+
+        uint256 elapsed = tracking.actedAtOf(productId, IReputationTracking.Status.Delivered) -
+            product.registeredAtOf(productId);
+        return calculateDeliveryScore(elapsed, product.deliveryWindowOf(productId));
+    }
+
+    /// @notice Applies the delivery-window formula to an elapsed time and window.
+    function calculateDeliveryScore(uint256 elapsed, uint256 deliveryWindow)
         public
-        view
+        pure
         returns (uint256)
     {
-        return scoreHistory[_stakeholder].length;
+        if (deliveryWindow == 0) revert InvalidDeliveryWindow();
+        if (elapsed <= deliveryWindow) return 10000;
+        if (elapsed - deliveryWindow >= deliveryWindow) return 0;
+        return 10000 - ((elapsed - deliveryWindow) * 10000) / deliveryWindow;
     }
 
-    // Get specific history entry
-    function getHistoryEntry(address _stakeholder, uint256 _index)
-        public
-        view
-        returns (
-            uint256 finalScore,
-            uint256 timestamp,
-            string memory batchId
-        )
+    /// @notice Returns configured quality, delivery, complaint, compliance and feedback weights.
+    function weights() external view returns (uint256[5] memory) {
+        return _weights;
+    }
+
+    /// @notice Returns the exponential moving-average alpha.
+    function alpha() external view returns (uint256) {
+        return _alpha;
+    }
+
+    /// @notice Returns the trust-level thresholds from lowest to highest.
+    function thresholds() external view returns (uint256[4] memory) {
+        return _thresholds;
+    }
+
+    /// @notice Returns the trust-level label for a basis-point score.
+    function trustLevelForScore(uint256 scoreBps) public view returns (string memory) {
+        if (scoreBps > 10000) revert InvalidScore();
+        if (scoreBps >= _thresholds[3]) return "Excellent";
+        if (scoreBps >= _thresholds[2]) return "Good";
+        if (scoreBps >= _thresholds[1]) return "Average";
+        if (scoreBps >= _thresholds[0]) return "Poor";
+        return "Critical";
+    }
+
+    /// @notice Combines available components using normalized configured weights.
+    function combine(
+        uint256[5] memory values,
+        uint256[5] memory componentWeights,
+        bool[5] memory available
+    ) public pure returns (uint256) {
+        uint256 weightedTotal;
+        uint256 availableWeight;
+        for (uint256 index = 0; index < 5; index++) {
+            if (values[index] > 10000) revert InvalidScore();
+            if (available[index]) {
+                weightedTotal += values[index] * componentWeights[index];
+                availableWeight += componentWeights[index];
+            }
+        }
+        if (availableWeight == 0) revert InvalidWeights();
+        return weightedTotal / availableWeight;
+    }
+
+    /// @notice Sets weights whose total must equal 10,000 basis points.
+    function setWeights(
+        uint256 quality,
+        uint256 delivery,
+        uint256 complaint,
+        uint256 compliance,
+        uint256 feedback
+    ) external {
+        _requireAdmin();
+        if (
+            quality > 10000 ||
+            delivery > 10000 ||
+            complaint > 10000 ||
+            compliance > 10000 ||
+            feedback > 10000 ||
+            quality + compliance == 0 ||
+            quality + delivery + complaint + compliance + feedback != 10000
+        ) revert InvalidWeights();
+        _weights = [quality, delivery, complaint, compliance, feedback];
+        emit WeightsUpdated(_weights);
+    }
+
+    /// @notice Sets the exponential moving-average alpha in the range 1..10,000.
+    function setAlpha(uint256 newAlpha) external {
+        _requireAdmin();
+        if (newAlpha == 0 || newAlpha > 10000) revert InvalidAlpha();
+        _alpha = newAlpha;
+        emit AlphaUpdated(newAlpha);
+    }
+
+    /// @notice Sets four strictly increasing trust thresholds in basis points.
+    function setThresholds(uint256 poor, uint256 average, uint256 good, uint256 excellent)
+        external
     {
-        require(
-            _index < scoreHistory[_stakeholder].length,
-            "Index out of range"
-        );
-        ScoreHistory memory h = scoreHistory[_stakeholder][_index];
-        return (h.finalScore, h.timestamp, h.batchId);
+        _requireAdmin();
+        if (
+            poor >= average ||
+            average >= good ||
+            good >= excellent ||
+            excellent > 10000
+        ) revert InvalidThresholds();
+        _thresholds = [poor, average, good, excellent];
+        emit ThresholdsUpdated(_thresholds);
+    }
+
+    function _requireProduct(uint256 productId) private view {
+        if (!product.exists(productId)) revert ProductNotFound();
+    }
+
+    function _requireInspector() private view {
+        if (!registry.hasRole(registry.INSPECTOR_ROLE(), msg.sender)) revert Unauthorized();
+    }
+
+    function _requireAdmin() private view {
+        if (!registry.isAdmin(msg.sender)) revert Unauthorized();
     }
 }
