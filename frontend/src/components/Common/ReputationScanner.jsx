@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { Html5Qrcode } from 'html5-qrcode';
+import { API_URL } from '../../config/api';
 
 const parseWallet = (value) => {
   try {
@@ -27,7 +28,7 @@ function ReputationScanner() {
     setError('');
     setWalletAddress(wallet);
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/reputation/${wallet}`);
+      const response = await axios.get(`${API_URL}/reputation/${wallet}`);
       setReputation(response.data);
     } catch (err) {
       setReputation(null);

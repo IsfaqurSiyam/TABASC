@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
+import { API_URL } from '../config/api';
 
 function ProductScan() {
   const { batchId } = useParams();
@@ -15,15 +16,15 @@ function ProductScan() {
       setLoading(true);
       setError('');
       try {
-        const res = await axios.get(`${process.env.REACT_APP_API_URL}/products/batch/${batchId}`);
+        const res = await axios.get(`${API_URL}/products/batch/${batchId}`);
         setProduct(res.data);
 
-        const trackRes = await axios.get(`${process.env.REACT_APP_API_URL}/tracking/${res.data.blockchainId}`);
+        const trackRes = await axios.get(`${API_URL}/tracking/${res.data.blockchainId}`);
         setHistory(trackRes.data.history);
 
         if (res.data.farmer?.walletAddress) {
           try {
-            const repRes = await axios.get(`${process.env.REACT_APP_API_URL}/reputation/${res.data.farmer.walletAddress}`);
+            const repRes = await axios.get(`${API_URL}/reputation/${res.data.farmer.walletAddress}`);
             setReputation(repRes.data);
           } catch {
             // no reputation record yet — that's fine, just skip

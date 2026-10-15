@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { lazy, Suspense, useState } from 'react';
 import axios from 'axios';
 import { Link } from 'react-router-dom';
-import ReputationScanner from '../Common/ReputationScanner';
+import { API_URL } from '../../config/api';
+
+const ReputationScanner = lazy(() => import('../Common/ReputationScanner'));
 
 function ConsumerDashboard() {
   const [batchId, setBatchId] = useState('');
@@ -28,12 +30,12 @@ function ConsumerDashboard() {
     setFeedbackEligibilityLoading(true);
     setLoading(true);
     try {
-      const res = await axios.get(`${process.env.REACT_APP_API_URL}/products/batch/${batchId}`);
+      const res = await axios.get(`${API_URL}/products/batch/${batchId}`);
       setProduct(res.data);
 
       const [trackResult, eligibilityResult] = await Promise.allSettled([
-        axios.get(`${process.env.REACT_APP_API_URL}/tracking/${res.data.blockchainId}`),
-        axios.get(`${process.env.REACT_APP_API_URL}/reputation/feedback/${encodeURIComponent(res.data.batchId)}`)
+        axios.get(`${API_URL}/tracking/${res.data.blockchainId}`),
+        axios.get(`${API_URL}/reputation/feedback/${encodeURIComponent(res.data.batchId)}`)
       ]);
       if (trackResult.status === 'fulfilled') {
         setHistory(trackResult.value.data.history);
@@ -61,7 +63,7 @@ function ConsumerDashboard() {
     setFeedbackLoading(true);
     try {
       const response = await axios.post(
-        `${process.env.REACT_APP_API_URL}/reputation/reviews`,
+        `${API_URL}/reputation/reviews`,
         { batchId: product.batchId, rating: Number(feedbackScore) }
       );
       setFeedbackMsg(response.status === 202
@@ -101,7 +103,9 @@ function ConsumerDashboard() {
         <div className="workflow-step"><b>2</b><div><strong>Review the journey</strong><span>Inspect origin, movement, status, and available notes.</span></div></div>
         <div className="workflow-step"><b>3</b><div><strong>Verify trust</strong><span>Use the reputation score to make an informed choice.</span></div></div>
       </div>
-      <ReputationScanner />
+      <Suspense fallback={<p>Loading QR scanner...</p>}>
+        <ReputationScanner />
+      </Suspense>
 
       <form id="workspace" onSubmit={handleSearch} style={{ marginBottom: 24, maxWidth: 500 }}>
         <div className="section-heading">

@@ -2,8 +2,9 @@ import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import axios from 'axios';
 import SupplyChainActions from './SupplyChainActions';
+import { API_URL } from '../../config/api';
 
-jest.mock('axios');
+vi.mock('axios');
 
 const product = {
   _id: 'product-id',
@@ -15,12 +16,12 @@ const product = {
 };
 
 beforeEach(() => {
-  jest.clearAllMocks();
+  vi.clearAllMocks();
   axios.post.mockResolvedValue({ data: { message: 'Action completed' } });
 });
 
 test('farmers can transfer harvested product custody to an approved distributor', async () => {
-  const onComplete = jest.fn();
+  const onComplete = vi.fn();
   render(<SupplyChainActions products={[product]} role="farmer" onComplete={onComplete} />);
   fireEvent.change(screen.getByLabelText('Product'), { target: { value: product._id } });
   fireEvent.change(screen.getByLabelText('Approved recipient email'), {
@@ -29,7 +30,7 @@ test('farmers can transfer harvested product custody to an approved distributor'
   fireEvent.click(screen.getByRole('button', { name: /transfer custody/i }));
 
   await waitFor(() => expect(axios.post).toHaveBeenCalledWith(
-    `${process.env.REACT_APP_API_URL}/products/${product._id}/handover`,
+    `${API_URL}/products/${product._id}/handover`,
     { email: 'distributor@example.test' }
   ));
   expect(onComplete).toHaveBeenCalled();
@@ -37,7 +38,7 @@ test('farmers can transfer harvested product custody to an approved distributor'
 
 test('retailers can record an active consumer after sale', async () => {
   const soldProduct = { ...product, currentStatus: 'Sold' };
-  render(<SupplyChainActions products={[soldProduct]} role="retailer" onComplete={jest.fn()} />);
+  render(<SupplyChainActions products={[soldProduct]} role="retailer" onComplete={vi.fn()} />);
   fireEvent.change(screen.getByLabelText('Product'), { target: { value: soldProduct._id } });
   fireEvent.change(screen.getByLabelText('Consumer email'), {
     target: { value: 'consumer@example.test' }
@@ -45,13 +46,13 @@ test('retailers can record an active consumer after sale', async () => {
   fireEvent.click(screen.getByRole('button', { name: /record buyer/i }));
 
   await waitFor(() => expect(axios.post).toHaveBeenCalledWith(
-    `${process.env.REACT_APP_API_URL}/tracking/${soldProduct._id}/buyer`,
+    `${API_URL}/tracking/${soldProduct._id}/buyer`,
     { email: 'consumer@example.test' }
   ));
 });
 
 test('inspectors can issue a recall with its reason', async () => {
-  render(<SupplyChainActions products={[product]} role="inspector" onComplete={jest.fn()} />);
+  render(<SupplyChainActions products={[product]} role="inspector" onComplete={vi.fn()} />);
   fireEvent.change(screen.getByLabelText('Product'), { target: { value: product._id } });
   fireEvent.change(screen.getByLabelText('Recall reason'), {
     target: { value: 'Contamination detected' }
@@ -59,7 +60,7 @@ test('inspectors can issue a recall with its reason', async () => {
   fireEvent.click(screen.getByRole('button', { name: /issue recall/i }));
 
   await waitFor(() => expect(axios.post).toHaveBeenCalledWith(
-    `${process.env.REACT_APP_API_URL}/tracking/${product._id}/recall`,
+    `${API_URL}/tracking/${product._id}/recall`,
     { reason: 'Contamination detected' }
   ));
 });

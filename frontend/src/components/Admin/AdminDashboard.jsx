@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
+import { API_URL } from '../../config/api';
 
 function AdminDashboard() {
   const [overview, setOverview] = useState(null);
@@ -12,8 +13,8 @@ function AdminDashboard() {
     setError('');
     try {
       const [overviewResponse, usersResponse] = await Promise.all([
-        axios.get(`${process.env.REACT_APP_API_URL}/admin/overview`),
-        axios.get(`${process.env.REACT_APP_API_URL}/admin/users`, {
+        axios.get(`${API_URL}/admin/overview`),
+        axios.get(`${API_URL}/admin/users`, {
           params: { status: 'all', page: 1, limit: 100 }
         })
       ]);
@@ -34,7 +35,7 @@ function AdminDashboard() {
     setWorkingUser(user._id);
     setError('');
     try {
-      await axios.patch(`${process.env.REACT_APP_API_URL}/admin/users/${user._id}/role`, {
+      await axios.patch(`${API_URL}/admin/users/${user._id}/role`, {
         action
       });
       await refresh();
@@ -49,7 +50,7 @@ function AdminDashboard() {
     setWorkingUser(user._id);
     setError('');
     try {
-      await axios.patch(`${process.env.REACT_APP_API_URL}/admin/users/${user._id}/active`, {
+      await axios.patch(`${API_URL}/admin/users/${user._id}/active`, {
         isActive: !user.isActive
       });
       await refresh();

@@ -25,6 +25,12 @@ Start the backend with `npm start --prefix client` after MongoDB, Ganache, and
 the contracts are available. `GET /api/health` reports database, chain,
 contract-code, and pending-sync status.
 
+Run the Vite frontend with `npm start --prefix frontend`; the default API base
+URL is `http://localhost:5000/api`. Set `VITE_API_URL` in `frontend/.env` when
+the backend uses a different URL. Run frontend tests with
+`npm test --prefix frontend` and create a production bundle with
+`npm run build --prefix frontend`.
+
 Verify a registered product's canonical data hash with
 `GET /api/verify/<blockchainId>`. If a blockchain transaction succeeds but its
 MongoDB write fails, the API records a pending sync and returns `202`; rerun

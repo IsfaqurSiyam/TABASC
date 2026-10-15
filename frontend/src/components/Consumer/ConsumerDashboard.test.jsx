@@ -3,9 +3,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import axios from 'axios';
 import ConsumerDashboard from './ConsumerDashboard';
+import { API_URL } from '../../config/api';
 
-jest.mock('axios');
-jest.mock('../Common/ReputationScanner', () => () => null);
+vi.mock('axios');
+vi.mock('../Common/ReputationScanner', () => ({ default: () => null }));
 
 const product = {
   _id: 'mongo-product-id',
@@ -46,13 +47,13 @@ const searchForBatch = async (eligibility = { canSubmit: true, reason: null }) =
   }
 };
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => vi.clearAllMocks());
 
 test('shows feedback submission only when the consumer is eligible', async () => {
   await searchForBatch();
   expect(screen.getByRole('button', { name: 'Submit Feedback' })).toBeEnabled();
   expect(axios.get).toHaveBeenCalledWith(
-    `${process.env.REACT_APP_API_URL}/reputation/feedback/BATCH-17`
+    `${API_URL}/reputation/feedback/BATCH-17`
   );
 });
 

@@ -331,20 +331,20 @@ contract('TABASC contracts', (accounts) => {
   });
 
   it('computes delivery scores at 0.5x, 1.5x and 2.5x the delivery window', async () => {
-    const expected = [
-      { elapsed: 50, score: 10000 },
-      { elapsed: 150, score: 5000 },
-      { elapsed: 250, score: 0 }
-    ];
-    for (const sample of expected) {
+    for (const targetElapsed of [50, 150, 250]) {
       const id = await registerProduct(100);
-      const elapsed = await prepareDelivery(id, sample.elapsed);
+      const elapsed = await prepareDelivery(id, targetElapsed);
       const score = await reputation.deliveryScoreOf(id);
       assert(
-        Math.abs(elapsed - sample.elapsed) <= 1,
-        `expected ${sample.elapsed}s elapsed, received ${elapsed}s`
+        Math.abs(elapsed - targetElapsed) <= 1,
+        `expected ${targetElapsed}s elapsed, received ${elapsed}s`
       );
-      assert.equal(score.toString(), sample.score.toString());
+      const expectedScore = elapsed <= 100
+        ? 10000
+        : elapsed >= 200
+          ? 0
+          : 10000 - Math.floor(((elapsed - 100) * 10000) / 100);
+      assert.equal(score.toString(), expectedScore.toString());
     }
   });
 

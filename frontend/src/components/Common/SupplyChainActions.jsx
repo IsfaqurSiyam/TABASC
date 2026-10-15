@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import axios from 'axios';
+import { API_URL } from '../../config/api';
 
 function SupplyChainActions({ products, role, onComplete }) {
   const [productId, setProductId] = useState('');
@@ -32,17 +33,17 @@ function SupplyChainActions({ products, role, onComplete }) {
       let response;
       if (action === 'recall') {
         response = await axios.post(
-          `${process.env.REACT_APP_API_URL}/tracking/${product._id}/recall`,
+          `${API_URL}/tracking/${product._id}/recall`,
           { reason }
         );
       } else if (action === 'buyer') {
         response = await axios.post(
-          `${process.env.REACT_APP_API_URL}/tracking/${product._id}/buyer`,
+          `${API_URL}/tracking/${product._id}/buyer`,
           { email }
         );
       } else {
         response = await axios.post(
-          `${process.env.REACT_APP_API_URL}/products/${product._id}/handover`,
+          `${API_URL}/products/${product._id}/handover`,
           { email }
         );
       }

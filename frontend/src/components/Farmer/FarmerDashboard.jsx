@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import ReputationQRCode from '../Common/ReputationQRCode';
 import SupplyChainActions from '../Common/SupplyChainActions';
+import { API_URL } from '../../config/api';
 
 function FarmerDashboard() {
   const [products, setProducts] = useState([]);
@@ -16,7 +17,7 @@ function FarmerDashboard() {
 
   const fetchProducts = async () => {
     try {
-      const res = await axios.get(`${process.env.REACT_APP_API_URL}/products/farmer/myproducts`);
+      const res = await axios.get(`${API_URL}/products/farmer/myproducts`);
       setProducts(res.data);
     } catch (err) {
       console.error(err);
@@ -36,7 +37,7 @@ function FarmerDashboard() {
     setMessage('');
     setLoading(true);
     try {
-      const res = await axios.post(`${process.env.REACT_APP_API_URL}/products/register`, {
+      const res = await axios.post(`${API_URL}/products/register`, {
         ...formData,
         quantity: Number(formData.quantity),
         deliveryWindow: Number(formData.deliveryWindow)
@@ -62,7 +63,7 @@ function FarmerDashboard() {
     setMessage('');
     try {
       const response = await axios.get(
-        `${process.env.REACT_APP_API_URL}/products/${product._id}/qr`,
+        `${API_URL}/products/${product._id}/qr`,
         { responseType: 'blob' }
       );
       const url = URL.createObjectURL(response.data);

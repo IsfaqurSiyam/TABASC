@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from '../../context/AuthContext';
 import SupplyChainActions from '../Common/SupplyChainActions';
+import { API_URL } from '../../config/api';
 
 function InspectorDashboard() {
   const { user } = useAuth();
@@ -23,7 +24,7 @@ function InspectorDashboard() {
 
   const fetchProducts = async () => {
     try {
-      const res = await axios.get(`${process.env.REACT_APP_API_URL}/products`);
+      const res = await axios.get(`${API_URL}/products`);
       setProducts(res.data);
     } catch (err) {
       console.error(err);
@@ -44,7 +45,7 @@ function InspectorDashboard() {
     if (!product) return;
     try {
       const response = await axios.get(
-        `${process.env.REACT_APP_API_URL}/reputation/participants/${product.blockchainId}`
+        `${API_URL}/reputation/participants/${product.blockchainId}`
       );
       setParticipants(response.data.participants);
     } catch (requestError) {
@@ -62,7 +63,7 @@ function InspectorDashboard() {
     setResult(null);
     setLoading(true);
     try {
-      const res = await axios.post(`${process.env.REACT_APP_API_URL}/reputation/score`, {
+      const res = await axios.post(`${API_URL}/reputation/score`, {
         batchId,
         stakeholderWallet,
         qualityScore: Number(qualityScore),
@@ -90,7 +91,7 @@ function InspectorDashboard() {
     setLookupError('');
     setReputation(null);
     try {
-      const res = await axios.get(`${process.env.REACT_APP_API_URL}/reputation/${lookupWallet}`);
+      const res = await axios.get(`${API_URL}/reputation/${lookupWallet}`);
       setReputation(res.data);
     } catch (err) {
       setLookupError(err.response?.data?.message || 'No reputation record found');
