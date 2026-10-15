@@ -1,16 +1,40 @@
-const express  = require('express');
-const router   = express.Router();
-const Product  = require('../models/Product');
-const Batch    = require('../models/Batch');
+const express = require('express');
+const QRCode = require('qrcode');
+const Product = require('../models/Product');
+const Batch = require('../models/Batch');
+const User = require('../models/User');
+const TrackingEvent = require('../models/TrackingEvent');
 const { protect } = require('./auth');
+const config = require('../config/env');
 const {
-  web3,
   ProductContract,
-  getAccounts,
+  TrackingContract,
+  web3,
   getTransactionCost
 } = require('../blockchain/web3');
+const { sendFromWallet } = require('../blockchain/wallets');
+const { AppError } = require('../middleware/errors');
+const { validateRequest } = require('../middleware/requestValidation');
+const {
+  STATUS_LABELS,
+  STATUS_MAP,
+  canonicalProductFields,
+  currentChainState,
+  hashRecord,
+  isExpired,
+  loadEncryptedWallet,
+  recordPendingSync,
+  requireCustody,
+  requireProductDataMatch,
+  resolveProduct,
+  serializeProduct,
+  updateProduct
+} = require('../services/supplyChain');
 
-const getProductIdFromReceipt = (receipt) => {
+const router = express.Router();
+const categories = ['vegetables', 'fruits', 'grains', 'dairy', 'meat', 'other'];
+
+const getProductRegistrationFromReceipt = (receipt) => {
   const eventAbi = ProductContract.options.jsonInterface.find(
     (item) => item.type === 'event' && item.name === 'ProductRegistered'
   );
@@ -25,176 +49,482 @@ const getProductIdFromReceipt = (receipt) => {
   if (!eventLog) {
     throw new Error('ProductRegistered event was not found in the transaction receipt');
   }
-
   const values = web3.eth.abi.decodeLog(
     eventAbi.inputs,
     eventLog.data,
     eventLog.topics.slice(1)
   );
   const productId = BigInt(values.productId);
-  if (productId === 0n || productId > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new Error('ProductRegistered event contained an invalid product id');
+  const registeredAt = BigInt(values.registeredAt);
+  if (productId === 0n || productId > BigInt(Number.MAX_SAFE_INTEGER) ||
+      registeredAt > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error('ProductRegistered event contained an invalid product id or timestamp');
   }
-  return Number(productId);
+  return {
+    blockchainId: Number(productId),
+    registeredAt: Number(registeredAt)
+  };
 };
 
-// ── POST /api/products/register ────────────────────────────────────────────
-// Farmer registers a new product
-router.post('/register', protect, async (req, res) => {
+const getProductRegistration = async (receipt, batchId) => {
   try {
-    const {
-      name, description, batchId,
-      category, quantity, unit,
-      harvestDate, expiryDate
-    } = req.body;
+    return getProductRegistrationFromReceipt(receipt);
+  } catch {
+    try {
+      const productIdValue = BigInt(
+        await ProductContract.methods.getProductIdByBatch(batchId).call()
+      );
+      if (productIdValue === 0n || productIdValue > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error('Product ID from batch lookup is invalid');
+      }
+      const blockchainId = Number(productIdValue);
+      const registeredAtValue = BigInt(
+        await ProductContract.methods.registeredAtOf(blockchainId).call()
+      );
+      if (registeredAtValue > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error('Registration timestamp from chain is invalid');
+      }
+      return { blockchainId, registeredAt: Number(registeredAtValue) };
+    } catch {
+      throw new AppError(
+        502,
+        'REGISTRATION_RECEIPT_UNREADABLE',
+        `Transaction ${receipt.transactionHash} succeeded, but registration details could not be recovered`
+      );
+    }
+  }
+};
 
-    // Only farmers can register products
-    if (req.user.role !== 'farmer') {
-      return res.status(403).json({ message: 'Only farmers can register products' });
+const parseDate = (value, field) => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) {
+    throw new AppError(400, 'INVALID_DATE', `${field} must be a valid date`);
+  }
+  return date;
+};
+
+const getScanUrl = (batchId) =>
+  `${config.corsOrigin}/scan/${encodeURIComponent(batchId)}`;
+
+const parsePage = (value, fallback, max) => {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? Math.min(parsed, max) : fallback;
+};
+
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const addPaginationHeaders = (res, { page, limit, total }) => {
+  res.set({
+    'X-Page': String(page),
+    'X-Limit': String(limit),
+    'X-Total-Count': String(total)
+  });
+};
+
+const buildProductFilter = (req, { farmerOnly = false } = {}) => {
+  const filter = { isActive: true };
+  if (farmerOnly) {
+    filter.farmer = req.user._id;
+  } else if (!['admin', 'inspector'].includes(req.user.role)) {
+    filter.currentOwner = req.user._id;
+  }
+
+  if (req.query.status) {
+    if (!STATUS_LABELS.includes(req.query.status)) {
+      throw new AppError(400, 'INVALID_STATUS', 'Unknown product status');
+    }
+    filter.currentStatus = req.query.status;
+  }
+  if (req.query.category) {
+    if (!categories.includes(req.query.category)) {
+      throw new AppError(400, 'INVALID_CATEGORY', 'Unknown product category');
+    }
+    filter.category = req.query.category;
+  }
+  if (req.query.text) {
+    const expression = new RegExp(escapeRegex(String(req.query.text).trim()), 'i');
+    filter.$or = [{ name: expression }, { batchId: expression }];
+  }
+  return filter;
+};
+
+const listProducts = async (req, res, next, options = {}) => {
+  try {
+    const page = parsePage(req.query.page, 1, Number.MAX_SAFE_INTEGER);
+    const limit = parsePage(req.query.limit, 25, 100);
+    const filter = buildProductFilter(req, options);
+    const [products, total] = await Promise.all([
+      Product.find(filter)
+        .populate('farmer', 'name email location')
+        .populate('currentOwner', 'name email role')
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit),
+      Product.countDocuments(filter)
+    ]);
+    addPaginationHeaders(res, { page, limit, total });
+    return res.json(products.map((product) => serializeProduct(product)));
+  } catch (error) {
+    return next(error);
+  }
+};
+
+const handlePendingSync = async (res, details) => {
+  const pending = await recordPendingSync(details);
+  return res.status(202).json({
+    message: 'Blockchain transaction succeeded; MongoDB synchronization is pending',
+    blockchainId: details.blockchainId,
+    txHash: details.txHash,
+    pendingSyncId: pending._id
+  });
+};
+
+router.post('/register', protect, validateRequest({
+  body: {
+    name: { required: true, type: 'string', minLength: 1 },
+    batchId: { required: true, type: 'string', minLength: 1 },
+    category: { type: 'string', enum: categories },
+    quantity: { required: true, type: 'number', min: Number.MIN_VALUE },
+    unit: { type: 'string', minLength: 1 },
+    deliveryWindow: { required: true, type: 'number', min: 1 },
+    harvestDate: { type: 'string' },
+    expiryDate: { type: 'string' },
+    description: { type: 'string' }
+  }
+}), async (req, res, next) => {
+  if (req.user.role !== 'farmer') {
+    return res.status(403).json({
+      message: 'Only approved farmers can register products',
+      code: 'FORBIDDEN'
+    });
+  }
+
+  let receipt;
+  try {
+    const name = req.body.name.trim();
+    const batchId = req.body.batchId.trim();
+    const quantity = Number(req.body.quantity);
+    const deliveryWindow = Number(req.body.deliveryWindow);
+    const unit = (req.body.unit || 'kg').trim();
+    const category = req.body.category || 'other';
+    const harvestDate = parseDate(req.body.harvestDate, 'harvestDate');
+    const expiryDate = parseDate(req.body.expiryDate, 'expiryDate');
+
+    if (!name || !batchId || !unit || !Number.isFinite(quantity) ||
+        quantity <= 0 || !Number.isSafeInteger(deliveryWindow) || deliveryWindow < 1) {
+      throw new AppError(400, 'VALIDATION_ERROR', 'Product fields and delivery window are invalid');
+    }
+    if (expiryDate && harvestDate && expiryDate <= harvestDate) {
+      throw new AppError(400, 'INVALID_DATE_RANGE', 'Expiry date must be after harvest date');
+    }
+    if (!web3.utils.isAddress(req.user.walletAddress)) {
+      throw new AppError(409, 'INVALID_WALLET', 'Farmer wallet address is invalid');
+    }
+    if (await Product.exists({ batchId })) {
+      throw new AppError(409, 'DUPLICATE_BATCH', 'Batch ID already exists');
+    }
+    if (await Batch.exists({ batchId })) {
+      throw new AppError(409, 'BATCH_ALREADY_EXISTS', 'A batch record already exists for this ID');
     }
 
-    // Check batch ID is unique
-    const exists = await Product.findOne({ batchId });
-    if (exists) {
-      return res.status(400).json({ message: 'Batch ID already exists' });
-    }
-
-    const farmerWallet = req.user.walletAddress;
-    if (!web3.utils.isAddress(farmerWallet)) {
-      return res.status(400).json({
-        message: 'Register a valid wallet address before creating products'
-      });
-    }
-
-    // Get Ganache accounts
-    const accounts = await getAccounts();
-    const farmerAccount = accounts[0];
-
-    const contractCode = await web3.eth.getCode(ProductContract.options.address);
-    if (!contractCode || contractCode === '0x' || contractCode === '0x0') {
-      return res.status(503).json({
-        message: 'Product contract is not deployed to the configured Ganache network. Run: npx truffle migrate --reset --network development'
-      });
-    }
-
-    // Call ProductContract on blockchain
-    const tx = await ProductContract.methods
-      .registerProduct(name, batchId)
-      .send({ from: farmerAccount, gas: 500000 });
-
-    const blockchainId = getProductIdFromReceipt(tx);
-    const gas = await getTransactionCost(tx.transactionHash);
-
-    // Save to MongoDB
-    const product = await Product.create({
-      blockchainId:    Number(blockchainId),
+    const record = {
       name,
-      description,
       batchId,
       category,
       quantity,
-      unit:            unit || 'kg',
-      farmer:          req.user._id,
-      farmerWallet,
-      currentOwner:    req.user._id,
-      currentStatus:   'Harvested',
+      unit,
       harvestDate,
       expiryDate,
-      transactionHash: tx.transactionHash
+      farmerWallet: req.user.walletAddress,
+      deliveryWindow
+    };
+    const fields = canonicalProductFields(record);
+    const dataHash = hashRecord(fields);
+    const qrCode = await QRCode.toDataURL(getScanUrl(batchId), {
+      errorCorrectionLevel: 'H',
+      margin: 1,
+      width: 400,
+      color: { dark: '#1B4332', light: '#FFFFFF' }
     });
-
-    // Create a batch record
-    await Batch.create({
+    const method = ProductContract.methods.registerProduct(
+      name,
       batchId,
-      farmer:        req.user._id,
-      farmerWallet,
-      products:      [product._id],
-      totalProducts: 1
+      dataHash,
+      deliveryWindow
+    );
+    const encryptedWallet = await loadEncryptedWallet(req.user._id);
+    receipt = await sendFromWallet(encryptedWallet, {
+      to: ProductContract.options.address,
+      data: method.encodeABI(),
+      gas: 800000
     });
-
-    res.status(201).json({
-      message:   'Product registered successfully',
-      product,
-      txHash:    tx.transactionHash,
-      blockchainId,
-      gas
-    });
-
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// ── GET /api/products ──────────────────────────────────────────────────────
-// Get all products
-router.get('/', protect, async (req, res) => {
-  try {
-    const products = await Product.find({ isActive: true })
-      .populate('farmer', 'name email location')
-      .populate('currentOwner', 'name email role')
-      .sort({ createdAt: -1 });
-
-    res.json(products);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// ── GET /api/products/:id ──────────────────────────────────────────────────
-// Get single product by MongoDB ID
-router.get('/:id', protect, async (req, res) => {
-  try {
-    const product = await Product.findById(req.params.id)
-      .populate('farmer', 'name email location phone')
-      .populate('currentOwner', 'name email role');
-
-    if (!product) {
-      return res.status(404).json({ message: 'Product not found' });
+    const { blockchainId, registeredAt } = await getProductRegistration(receipt, batchId);
+    let gas = null;
+    let gasUnavailable = false;
+    try {
+      gas = await getTransactionCost(receipt.transactionHash);
+    } catch (gasError) {
+      gasUnavailable = true;
     }
+    const productData = {
+      blockchainId,
+      name,
+      description: req.body.description,
+      batchId,
+      category,
+      quantity,
+      unit,
+      farmer: req.user._id,
+      farmerWallet: req.user.walletAddress,
+      currentOwner: req.user._id,
+      currentStatus: 'Harvested',
+      deliveryWindow,
+      dataHash,
+      harvestDate,
+      expiryDate,
+      qrCode,
+      transactionHash: receipt.transactionHash,
+      isRecalled: false
+    };
 
-    // Also get blockchain data
-    const blockchainData = await ProductContract.methods
-      .getProduct(product.blockchainId)
-      .call();
-
-    res.json({ product, blockchainData });
-
+    try {
+      const product = await Product.create(productData);
+      await Batch.create({
+        batchId,
+        farmer: req.user._id,
+        farmerWallet: req.user.walletAddress,
+        products: [product._id],
+        totalProducts: 1
+      });
+      await TrackingEvent.create({
+        product: product._id,
+        blockchainId,
+        eventType: 'shipment_update',
+        status: 'Harvested',
+        actor: req.user._id,
+        actorWallet: req.user.walletAddress,
+        dataHash,
+        txHash: receipt.transactionHash,
+        time: new Date(registeredAt * 1000)
+      });
+      return res.status(201).json({
+        message: 'Product registered successfully',
+        product: serializeProduct(product),
+        txHash: receipt.transactionHash,
+        blockchainId,
+        gas,
+        gasUnavailable
+      });
+    } catch (databaseError) {
+      return handlePendingSync(res, {
+        operation: 'product_registered',
+        blockchainId,
+        txHash: receipt.transactionHash,
+        payload: {
+          product: {
+            ...productData,
+            farmer: String(productData.farmer),
+            currentOwner: String(productData.currentOwner),
+            harvestDate: harvestDate ? harvestDate.toISOString() : null,
+            expiryDate: expiryDate ? expiryDate.toISOString() : null
+          },
+          event: {
+            eventType: 'shipment_update',
+            status: 'Harvested',
+            actorId: String(req.user._id),
+            actorWallet: req.user.walletAddress,
+            dataHash,
+            time: new Date(registeredAt * 1000).toISOString()
+          }
+        }
+      });
+    }
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    return next(error);
   }
 });
 
-// ── GET /api/products/batch/:batchId ──────────────────────────────────────
-// Get product by batch ID (used for QR code scan)
-router.get('/batch/:batchId', async (req, res) => {
+router.get('/', protect, (req, res, next) => listProducts(req, res, next));
+
+router.get('/farmer/myproducts', protect, (req, res, next) => {
+  if (req.user.role !== 'farmer') {
+    return res.status(403).json({ message: 'Farmer access required', code: 'FORBIDDEN' });
+  }
+  return listProducts(req, res, next, { farmerOnly: true });
+});
+
+router.get('/batch/:batchId', async (req, res, next) => {
   try {
     const product = await Product.findOne({ batchId: req.params.batchId })
       .populate('farmer', 'name email location phone walletAddress')
       .populate('currentOwner', 'name email role');
-
     if (!product) {
-      return res.status(404).json({ message: 'Product not found' });
+      throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
     }
-
-    res.json(product);
-
+    const chainState = await currentChainState(product.blockchainId);
+    let verifiedOnChain = false;
+    try {
+      await requireProductDataMatch(product);
+      verifiedOnChain = true;
+    } catch (error) {
+      if (error.code !== 'PRODUCT_DATA_MISMATCH') throw error;
+    }
+    return res.json(serializeProduct(product, {
+      currentStatus: chainState.status,
+      isRecalled: chainState.recalled,
+      verifiedOnChain
+    }));
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    return next(error);
   }
 });
 
-// ── GET /api/products/farmer/myproducts ───────────────────────────────────
-// Get all products for logged in farmer
-router.get('/farmer/myproducts', protect, async (req, res) => {
+router.get('/:id/qr', protect, async (req, res, next) => {
   try {
-    const products = await Product.find({
-      farmer:   req.user._id,
-      isActive: true
-    }).sort({ createdAt: -1 });
-
-    res.json(products);
+    const product = await resolveProduct(req.params.id);
+    if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
+    const isPrivileged = ['admin', 'inspector'].includes(req.user.role);
+    const canView = String(product.farmer) === String(req.user._id) ||
+      String(product.currentOwner) === String(req.user._id);
+    if (!isPrivileged && !canView) {
+      throw new AppError(403, 'FORBIDDEN', 'You do not have access to this product QR code');
+    }
+    const buffer = await QRCode.toBuffer(getScanUrl(product.batchId), {
+      errorCorrectionLevel: 'H',
+      margin: 1,
+      width: 600,
+      color: { dark: '#1B4332', light: '#FFFFFF' }
+    });
+    res.set({
+      'Content-Type': 'image/png',
+      'Content-Disposition': `attachment; filename="tabasc-product-${encodeURIComponent(product.batchId)}.png"`
+    });
+    return res.send(buffer);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    return next(error);
+  }
+});
+
+router.post('/:id/handover', protect, validateRequest({
+  params: { id: { required: true, type: 'string' } },
+  body: { email: { required: true, type: 'string', pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ } }
+}), async (req, res, next) => {
+  try {
+    const product = await resolveProduct(req.params.id);
+    if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
+
+    const chainState = await currentChainState(product.blockchainId);
+    if (chainState.recalled) {
+      throw new AppError(409, 'PRODUCT_RECALLED', 'Recalled products cannot be handed over');
+    }
+    await requireCustody(product, req.user);
+    const expectedRole = chainState.statusIndex === STATUS_MAP.Harvested
+      ? 'distributor'
+      : chainState.statusIndex === STATUS_MAP.Delivered ? 'retailer' : null;
+    if (!expectedRole) {
+      throw new AppError(409, 'INVALID_HANDOVER_STATUS', 'Handover is allowed only after Harvested or Delivered');
+    }
+    if (req.user.role !== (expectedRole === 'distributor' ? 'farmer' : 'distributor')) {
+      throw new AppError(403, 'FORBIDDEN', 'Your role cannot hand over this product at its current status');
+    }
+
+    const recipient = await User.findOne({
+      email: req.body.email.trim().toLowerCase(),
+      role: expectedRole,
+      isActive: true
+    });
+    if (!recipient || !web3.utils.isAddress(recipient.walletAddress)) {
+      throw new AppError(404, 'RECIPIENT_NOT_FOUND', `An active ${expectedRole} with that email was not found`);
+    }
+
+    const method = TrackingContract.methods.handover(
+      product.blockchainId,
+      recipient.walletAddress
+    );
+    const encryptedWallet = await loadEncryptedWallet(req.user._id);
+    const receipt = await sendFromWallet(encryptedWallet, {
+      to: TrackingContract.options.address,
+      data: method.encodeABI(),
+      gas: 300000
+    });
+    try {
+      await updateProduct(product._id, {
+        $set: {
+          currentOwner: recipient._id,
+          currentStatus: chainState.status,
+          transactionHash: receipt.transactionHash
+        }
+      });
+      await TrackingEvent.create({
+        product: product._id,
+        blockchainId: product.blockchainId,
+        eventType: 'handover',
+        status: chainState.status,
+        actor: req.user._id,
+        actorWallet: req.user.walletAddress,
+        dataHash: product.dataHash,
+        txHash: receipt.transactionHash,
+        details: { from: String(req.user._id), to: String(recipient._id), recipientWallet: recipient.walletAddress }
+      });
+    } catch (databaseError) {
+      return handlePendingSync(res, {
+        operation: 'custody_transferred',
+        blockchainId: product.blockchainId,
+        txHash: receipt.transactionHash,
+        payload: {
+          productId: String(product._id),
+          targetUserId: String(recipient._id),
+          targetWallet: recipient.walletAddress,
+          currentStatus: chainState.status,
+          event: {
+            eventType: 'handover',
+            status: chainState.status,
+            actorId: String(req.user._id),
+            actorWallet: req.user.walletAddress,
+            dataHash: product.dataHash,
+            details: { from: String(req.user._id), to: String(recipient._id), recipientWallet: recipient.walletAddress }
+          }
+        }
+      });
+    }
+    return res.json({
+      message: 'Product handed over successfully',
+      blockchainId: product.blockchainId,
+      currentOwner: { _id: recipient._id, name: recipient.name, role: recipient.role },
+      txHash: receipt.transactionHash
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get('/:id', protect, async (req, res, next) => {
+  try {
+    const product = await resolveProduct(req.params.id);
+    if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
+    const isPrivileged = ['admin', 'inspector'].includes(req.user.role);
+    const canView = String(product.farmer) === String(req.user._id) ||
+      String(product.currentOwner) === String(req.user._id);
+    if (!isPrivileged && !canView) {
+      throw new AppError(403, 'FORBIDDEN', 'You do not have access to this product');
+    }
+    const [populatedProduct, blockchainData, chainState] = await Promise.all([
+      Product.findById(product._id)
+        .populate('farmer', 'name email location phone')
+        .populate('currentOwner', 'name email role'),
+      ProductContract.methods.getProduct(product.blockchainId).call(),
+      currentChainState(product.blockchainId)
+    ]);
+    return res.json({
+      product: serializeProduct(populatedProduct, {
+        currentStatus: chainState.status,
+        isRecalled: chainState.recalled
+      }),
+      blockchainData
+    });
+  } catch (error) {
+    return next(error);
   }
 });
 

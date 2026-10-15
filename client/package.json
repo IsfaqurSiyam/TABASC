@@ -13,7 +13,8 @@
     "sync:env": "node scripts/sync-env.js",
     "seed:admin": "node scripts/seed-admin.js",
     "migrate:wallets": "node scripts/migrate-wallets.js",
-    "sync:roles": "node scripts/sync-roles.js"
+    "sync:roles": "node scripts/sync-roles.js",
+    "reconcile": "node scripts/reconcile.js"
   },
   "keywords": [],
   "author": "",

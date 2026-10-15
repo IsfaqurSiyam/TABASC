@@ -42,6 +42,10 @@ const ProductSchema = new mongoose.Schema({
     type:     String,
     required: true
   },
+  dataHash: {
+    type: String,
+    required: true
+  },
   currentOwner: {
     type:    mongoose.Schema.Types.ObjectId,
     ref:     'User'
@@ -50,6 +54,22 @@ const ProductSchema = new mongoose.Schema({
     type:    String,
     enum:    ['Harvested', 'PickedUp', 'InTransit', 'Delivered', 'OnShelf', 'Sold'],
     default: 'Harvested'
+  },
+  deliveryWindow: {
+    type: Number,
+    required: true,
+    min: 1
+  },
+  buyer: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  isRecalled: {
+    type: Boolean,
+    default: false
+  },
+  recallReason: {
+    type: String
   },
   harvestDate: {
     type: Date

@@ -25,6 +25,13 @@ Start the backend with `npm start --prefix client` after MongoDB, Ganache, and
 the contracts are available. `GET /api/health` reports database, chain,
 contract-code, and pending-sync status.
 
+Verify a registered product's canonical data hash with
+`GET /api/verify/<blockchainId>`. If a blockchain transaction succeeds but its
+MongoDB write fails, the API records a pending sync and returns `202`; rerun
+`npm run reconcile --prefix client` to safely retry those writes. The latest
+reconciliation result and remaining pending-sync count are available from the
+admin overview.
+
 Create the first administrator with `npm run seed:admin --prefix client`.
 After a contract redeployment, restore approved on-chain roles with
 `npm run sync:roles --prefix client`.

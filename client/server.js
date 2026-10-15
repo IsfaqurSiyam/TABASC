@@ -80,6 +80,7 @@ const reputationRoutes = require('./routes/reputation');
 const qrRoutes = require('./routes/qr');
 const adminRoutes = require('./routes/admin');
 const healthRoutes = require('./routes/health');
+const verifyRoutes = require('./routes/verify');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
@@ -87,6 +88,7 @@ app.use('/api/tracking', trackingRoutes);
 app.use('/api/reputation', reputationRoutes);
 app.use('/api/qr', qrRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/verify', verifyRoutes);
 app.use('/api', healthRoutes);
 
 app.get('/', (req, res) => {

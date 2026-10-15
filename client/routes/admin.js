@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const Product = require('../models/Product');
 const AuditLog = require('../models/AuditLog');
+const PendingSync = require('../models/PendingSync');
+const ReconcileRun = require('../models/ReconcileRun');
 const { protect } = require('./auth');
 const config = require('../config/env');
 const {
@@ -329,7 +331,7 @@ router.patch('/reputation-config', async (req, res, next) => {
 
 router.get('/overview', async (req, res, next) => {
   try {
-    const [userCounts, productCounts, products, stakeholders, pendingSyncs] = await Promise.all([
+    const [userCounts, productCounts, products, stakeholders, pendingSyncs, lastReconcileRun] = await Promise.all([
       Promise.all(['farmer', 'distributor', 'retailer', 'inspector', 'consumer', 'admin']
         .map(async (role) => [role, await User.countDocuments({ role })])),
       Product.aggregate([{ $group: { _id: '$currentStatus', count: { $sum: 1 } } }]),
@@ -338,9 +340,8 @@ router.get('/overview', async (req, res, next) => {
         role: { $in: reputationRoles },
         walletAddress: { $type: 'string' }
       }).select('role walletAddress'),
-      mongoose.connection.db
-        ? mongoose.connection.db.collection('pendingsyncs').countDocuments({ status: { $ne: 'resolved' } })
-        : Promise.resolve(null)
+      PendingSync.countDocuments({ status: 'pending' }),
+      ReconcileRun.findOne().sort({ completedAt: -1 })
     ]);
 
     const recalledProducts = await Promise.all(products.map(async (product) => ({
@@ -383,7 +384,14 @@ router.get('/overview', async (req, res, next) => {
         .map((entry) => entry.product),
       averageReputationByRole,
       pendingSyncs,
-      lastReconcileResult: null
+      lastReconcileResult: lastReconcileRun
+        ? {
+          completedAt: lastReconcileRun.completedAt,
+          processed: lastReconcileRun.processed,
+          failed: lastReconcileRun.failed,
+          result: lastReconcileRun.result
+        }
+        : null
     });
   } catch (error) {
     return next(error);
