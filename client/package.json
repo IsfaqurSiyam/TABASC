@@ -10,7 +10,10 @@
     "contracts:compile": "truffle compile --config ../truffle-config.js",
     "contracts:migrate": "truffle migrate --reset --config ../truffle-config.js",
     "contracts:test": "truffle test --config ../truffle-config.js",
-    "sync:env": "node scripts/sync-env.js"
+    "sync:env": "node scripts/sync-env.js",
+    "seed:admin": "node scripts/seed-admin.js",
+    "migrate:wallets": "node scripts/migrate-wallets.js",
+    "sync:roles": "node scripts/sync-roles.js"
   },
   "keywords": [],
   "author": "",

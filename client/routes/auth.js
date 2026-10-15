@@ -1,15 +1,20 @@
 const express = require('express');
-const router  = express.Router();
-const jwt     = require('jsonwebtoken');
-const User    = require('../models/User');
+const jwt = require('jsonwebtoken');
+const User = require('../models/User');
+const config = require('../config/env');
+const { createWallet } = require('../blockchain/wallets');
 const { validateRequest } = require('../middleware/requestValidation');
 
-// ── Helper: generate JWT token ─────────────────────────────────────────────
-const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
-};
+const router = express.Router();
+const requestedRoles = ['farmer', 'distributor', 'retailer', 'inspector'];
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// ── Middleware: protect routes ─────────────────────────────────────────────
+const generateToken = (id) => jwt.sign(
+  { id: String(id) },
+  config.jwtSecret,
+  { expiresIn: config.jwtExpiresIn }
+);
+
 const protect = async (req, res, next) => {
   const authorization = req.headers.authorization;
   if (!authorization || !authorization.startsWith('Bearer ')) {
@@ -21,8 +26,10 @@ const protect = async (req, res, next) => {
 
   let decoded;
   try {
-    const token = authorization.slice('Bearer '.length);
-    decoded = jwt.verify(token, process.env.JWT_SECRET);
+    decoded = jwt.verify(
+      authorization.slice('Bearer '.length),
+      config.jwtSecret
+    );
   } catch (error) {
     return res.status(401).json({
       message: 'Not authorised',
@@ -32,106 +39,186 @@ const protect = async (req, res, next) => {
 
   let user;
   try {
-    user = await User.findById(decoded.id).select('-password');
+    user = await User.findById(decoded.id).select('-password -walletKeystore');
   } catch (error) {
     return next(error);
   }
-  if (!user) {
+  if (!user || !user.isActive) {
     return res.status(401).json({
       message: 'Not authorised',
       code: 'UNAUTHORIZED'
     });
   }
+
   req.user = user;
   return next();
 };
 
-// ── POST /api/auth/register ────────────────────────────────────────────────
-router.post('/register', validateRequest({
+const registrationSchema = validateRequest({
   body: {
     name: { required: true, type: 'string', minLength: 1 },
-    email: { required: true, type: 'string', pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ },
-    password: { required: true, type: 'string', minLength: 1 }
+    email: { required: true, type: 'string', pattern: emailPattern },
+    password: { required: true, type: 'string', minLength: 8 },
+    requestedRole: { type: 'string', enum: requestedRoles },
+    phone: { type: 'string' },
+    location: { type: 'string' }
   }
-}), async (req, res) => {
+});
+
+router.post('/register', registrationSchema, async (req, res, next) => {
+  const name = req.body.name.trim();
+  const email = req.body.email.trim().toLowerCase();
+  const { password, phone, location } = req.body;
+  const requestedRole = req.body.requestedRole || null;
+
+  if (!name) {
+    return res.status(400).json({
+      message: 'Name is required',
+      code: 'VALIDATION_ERROR'
+    });
+  }
+  if (!/\d/.test(password)) {
+    return res.status(400).json({
+      message: 'Password must contain at least one digit',
+      code: 'VALIDATION_ERROR'
+    });
+  }
+
   try {
-    const { name, email, password, role, walletAddress, phone, location } = req.body;
-
-    // Check if user exists
-    const userExists = await User.findOne({ email });
-    if (userExists) {
-      return res.status(400).json({ message: 'User already exists' });
+    if (await User.exists({ email })) {
+      return res.status(409).json({
+        message: 'An account with that email already exists',
+        code: 'DUPLICATE_ACCOUNT'
+      });
     }
-
-    // Create user
+    const wallet = await createWallet();
     const user = await User.create({
       name,
       email,
       password,
-      role,
-      walletAddress,
+      role: 'consumer',
+      requestedRole,
+      walletAddress: wallet.address,
+      walletKeystore: JSON.stringify(wallet.keystore),
       phone,
       location
     });
 
-    res.status(201).json({
-      _id:           user._id,
-      name:          user.name,
-      email:         user.email,
-      role:          user.role,
+    return res.status(201).json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      requestedRole: user.requestedRole,
       walletAddress: user.walletAddress,
-      token:         generateToken(user._id)
+      pendingApproval: Boolean(user.requestedRole),
+      fundingTxHash: wallet.fundingReceipt.transactionHash,
+      token: generateToken(user._id)
     });
-
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    if (error.code === 11000) {
+      return res.status(409).json({
+        message: 'An account with that email or wallet already exists',
+        code: 'DUPLICATE_ACCOUNT'
+      });
+    }
+    return next(error);
   }
 });
 
-// ── POST /api/auth/login ───────────────────────────────────────────────────
 router.post('/login', validateRequest({
   body: {
-    email: { required: true, type: 'string', pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ },
+    email: { required: true, type: 'string', pattern: emailPattern },
     password: { required: true, type: 'string', minLength: 1 }
   }
-}), async (req, res) => {
+}), async (req, res, next) => {
   try {
-    const { email, password } = req.body;
-
-    // Find user
+    const email = req.body.email.trim().toLowerCase();
     const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(401).json({ message: 'Invalid email or password' });
+    if (!user || !user.isActive || !await user.matchPassword(req.body.password)) {
+      return res.status(401).json({
+        message: 'Invalid email or password',
+        code: 'INVALID_CREDENTIALS'
+      });
     }
 
-    // Check password
-    const isMatch = await user.matchPassword(password);
-    if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid email or password' });
-    }
-
-    res.json({
-      _id:           user._id,
-      name:          user.name,
-      email:         user.email,
-      role:          user.role,
+    return res.json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      requestedRole: user.requestedRole,
       walletAddress: user.walletAddress,
-      token:         generateToken(user._id)
+      token: generateToken(user._id)
     });
-
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    return next(error);
   }
 });
 
-// ── GET /api/auth/profile ──────────────────────────────────────────────────
-router.get('/profile', protect, async (req, res) => {
+const getCurrentUser = (req, res) => res.json(req.user);
+router.get('/me', protect, getCurrentUser);
+router.get('/profile', protect, getCurrentUser);
+
+router.put('/profile', protect, validateRequest({
+  body: {
+    name: { type: 'string', minLength: 1 },
+    phone: { type: 'string' },
+    location: { type: 'string' }
+  }
+}), async (req, res, next) => {
+  const body = req.body || {};
+  const updates = {};
+  for (const field of ['name', 'phone', 'location']) {
+    if (Object.prototype.hasOwnProperty.call(body, field)) {
+      updates[field] = field === 'name' ? body[field].trim() : body[field];
+    }
+  }
+  if (!Object.keys(updates).length || (updates.name !== undefined && !updates.name)) {
+    return res.status(400).json({
+      message: 'Provide a valid name, phone, or location to update',
+      code: 'VALIDATION_ERROR'
+    });
+  }
+
   try {
-    const user = await User.findById(req.user._id).select('-password');
-    res.json(user);
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    ).select('-password -walletKeystore');
+    return res.json(user);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    return next(error);
   }
 });
 
-module.exports = { router, protect };
+router.put('/password', protect, validateRequest({
+  body: {
+    currentPassword: { required: true, type: 'string', minLength: 1 },
+    newPassword: { required: true, type: 'string', minLength: 8 }
+  }
+}), async (req, res, next) => {
+  if (!/\d/.test(req.body.newPassword)) {
+    return res.status(400).json({
+      message: 'Password must contain at least one digit',
+      code: 'VALIDATION_ERROR'
+    });
+  }
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user || !await user.matchPassword(req.body.currentPassword)) {
+      return res.status(400).json({
+        message: 'Current password is incorrect',
+        code: 'INVALID_PASSWORD'
+      });
+    }
+    user.password = req.body.newPassword;
+    await user.save();
+    return res.json({ message: 'Password updated successfully' });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+module.exports = { router, protect, generateToken };

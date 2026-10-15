@@ -25,5 +25,13 @@ Start the backend with `npm start --prefix client` after MongoDB, Ganache, and
 the contracts are available. `GET /api/health` reports database, chain,
 contract-code, and pending-sync status.
 
+Create the first administrator with `npm run seed:admin --prefix client`.
+After a contract redeployment, restore approved on-chain roles with
+`npm run sync:roles --prefix client`.
+
+Back up MongoDB with `mongodump` before running `npm run migrate:wallets
+--prefix client`; that script replaces legacy wallet addresses while retaining
+them in `legacyWallet`.
+
 For an isolated local test instance, append `-- --port 8546 --db-path
 <folder>` to the Ganache start command.

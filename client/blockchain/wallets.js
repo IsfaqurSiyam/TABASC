@@ -19,11 +19,14 @@ const withWalletQueue = async (address, operation) => {
   }
 };
 
-const unlockWallet = (encryptedKeystore, passphrase = config.walletPassphrase) => {
+const unlockWallet = async (encryptedKeystore, passphrase = config.walletPassphrase) => {
   if (!encryptedKeystore || !passphrase) {
     throw new Error('An encrypted wallet and passphrase are required');
   }
-  return web3.eth.accounts.decrypt(encryptedKeystore, passphrase);
+  const keystore = typeof encryptedKeystore === 'string'
+    ? JSON.parse(encryptedKeystore)
+    : encryptedKeystore;
+  return web3.eth.accounts.decrypt(keystore, passphrase);
 };
 
 const fundWallet = async (address, amountEth = config.fundAmountEth) => {
@@ -55,7 +58,7 @@ const createWallet = async (passphrase = config.walletPassphrase, amountEth = co
 };
 
 const sendFromWallet = async (encryptedKeystore, transaction, passphrase = config.walletPassphrase) => {
-  const account = unlockWallet(encryptedKeystore, passphrase);
+  const account = await unlockWallet(encryptedKeystore, passphrase);
   if (!transaction || !web3.utils.isAddress(transaction.to)) {
     throw new Error('A valid transaction recipient is required');
   }
