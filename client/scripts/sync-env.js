@@ -22,7 +22,8 @@ function getOption(name, fallback) {
 
 function readContractAddress(contractsDirectory, contractName) {
   const artifactPath = path.join(contractsDirectory, `${contractName}.json`);
-  const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8'));
+  const contents = fs.readFileSync(artifactPath, 'utf8').replace(/^\uFEFF/, '');
+  const artifact = JSON.parse(contents);
   const address = artifact.networks?.[networkId]?.address;
 
   if (typeof address !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
@@ -49,11 +50,15 @@ function updateEnvFile(envPath, addresses) {
 
   for (const [name, address] of Object.entries(addresses)) {
     const matchingLine = new RegExp(`^\\s*${name}\\s*=`);
-    const index = lines.findIndex((line) => matchingLine.test(line));
-    if (index === -1) {
+    let found = false;
+    for (let index = 0; index < lines.length; index += 1) {
+      if (matchingLine.test(lines[index])) {
+        lines[index] = `${name}=${address}`;
+        found = true;
+      }
+    }
+    if (!found) {
       lines.push(`${name}=${address}`);
-    } else {
-      lines[index] = `${name}=${address}`;
     }
   }
 
