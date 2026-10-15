@@ -120,7 +120,7 @@ function InspectorDashboard() {
       </div>
       <div className="kpi-grid">
         <div className="kpi-card"><strong>{products.length}</strong><span>Products to review</span></div>
-        <div className="kpi-card"><strong>5</strong><span>Scoring dimensions</span></div>
+        <div className="kpi-card"><strong>2</strong><span>Inspector-assessed dimensions</span></div>
         <div className="kpi-card"><strong>0–10</strong><span>Score range</span></div>
         <div className="kpi-card"><strong>1000</strong><span>Maximum reputation</span></div>
       </div>

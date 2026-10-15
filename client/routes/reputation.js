@@ -387,6 +387,45 @@ router.post('/reviews', protect, validateRequest({
   }
 });
 
+router.get('/feedback/:batchId', protect, async (req, res, next) => {
+  try {
+    if (req.user.role !== 'consumer') {
+      throw new AppError(403, 'FORBIDDEN', 'Only consumers can check feedback eligibility');
+    }
+    const product = await getProduct(req.params.batchId.trim());
+    const [status, recalled, feedback] = await Promise.all([
+      TrackingContract.methods.getCurrentStatus(product.blockchainId).call(),
+      TrackingContract.methods.isRecalled(product.blockchainId).call(),
+      ReputationContract.methods.getFeedback(product.blockchainId).call()
+    ]);
+    let reason = null;
+    if (Number(status) !== 5) {
+      reason = 'Feedback is available only after the product is sold.';
+    } else if (recalled === true || recalled === 'true') {
+      reason = 'Feedback is unavailable because this product has been recalled.';
+    } else if (
+      feedback.exists === true || feedback.exists === 'true' ||
+      feedback[4] === true || feedback[4] === 'true'
+    ) {
+      reason = 'Feedback has already been submitted for this product.';
+    }
+    if (reason === null) {
+      let buyer;
+      try {
+        buyer = await TrackingContract.methods.buyerOf(product.blockchainId).call();
+      } catch {
+        reason = 'Feedback is unavailable until the retailer records the buyer.';
+      }
+      if (buyer && buyer.toLowerCase() !== req.user.walletAddress.toLowerCase()) {
+        reason = 'Only the consumer recorded as this product’s buyer can submit feedback.';
+      }
+    }
+    return res.json({ canSubmit: reason === null, reason });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get('/batch/:batchId', protect, async (req, res, next) => {
   try {
     const batch = await Batch.findOne({ batchId: req.params.batchId })

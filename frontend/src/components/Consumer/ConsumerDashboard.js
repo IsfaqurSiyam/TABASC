@@ -14,23 +14,44 @@ function ConsumerDashboard() {
   const [feedbackMsg, setFeedbackMsg] = useState('');
   const [feedbackError, setFeedbackError] = useState('');
   const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackEligibility, setFeedbackEligibility] = useState(null);
+  const [feedbackEligibilityLoading, setFeedbackEligibilityLoading] = useState(false);
 
   const handleSearch = async (e) => {
     e.preventDefault();
     setError('');
     setProduct(null);
     setHistory([]);
+    setFeedbackEligibility(null);
+    setFeedbackMsg('');
+    setFeedbackError('');
+    setFeedbackEligibilityLoading(true);
     setLoading(true);
     try {
       const res = await axios.get(`${process.env.REACT_APP_API_URL}/products/batch/${batchId}`);
       setProduct(res.data);
 
-      const trackRes = await axios.get(`${process.env.REACT_APP_API_URL}/tracking/${res.data.blockchainId}`);
-      setHistory(trackRes.data.history);
+      const [trackResult, eligibilityResult] = await Promise.allSettled([
+        axios.get(`${process.env.REACT_APP_API_URL}/tracking/${res.data.blockchainId}`),
+        axios.get(`${process.env.REACT_APP_API_URL}/reputation/feedback/${encodeURIComponent(res.data.batchId)}`)
+      ]);
+      if (trackResult.status === 'fulfilled') {
+        setHistory(trackResult.value.data.history);
+      } else {
+        setError(trackResult.reason.response?.data?.message || 'Unable to load product journey');
+      }
+      if (eligibilityResult.status === 'fulfilled') {
+        setFeedbackEligibility(eligibilityResult.value.data);
+      } else {
+        setFeedbackError(
+          eligibilityResult.reason.response?.data?.message || 'Unable to check feedback eligibility'
+        );
+      }
     } catch (err) {
       setError(err.response?.data?.message || 'Product not found');
     } finally {
       setLoading(false);
+      setFeedbackEligibilityLoading(false);
     }
   };
 
@@ -43,11 +64,15 @@ function ConsumerDashboard() {
         `${process.env.REACT_APP_API_URL}/reputation/reviews`,
         { batchId: product.batchId, rating: Number(feedbackScore) }
       );
-      setFeedbackMsg(
-        `Review recorded. Average: ${response.data.averageRating}/10 from ` +
-        `${response.data.reviewCount} reviews. Farmer score: ` +
-        `${response.data.finalScore}/1000.`
-      );
+      setFeedbackMsg(response.status === 202
+        ? `${response.data.message} Transaction: ${response.data.txHash}`
+        : `${response.data.message}. Transaction: ${response.data.txHash}`);
+      setFeedbackEligibility({
+        canSubmit: false,
+        reason: response.status === 202
+          ? 'Your feedback transaction is recorded; database synchronization is pending.'
+          : 'Feedback has already been submitted for this product.'
+      });
     } catch (err) {
       setFeedbackError(err.response?.data?.message || 'Review submission failed');
     } finally {
@@ -83,9 +108,10 @@ function ConsumerDashboard() {
           <h3>Trace a product</h3>
           <p>Search by batch ID</p>
         </div>
-        <label>Enter Batch ID (from product QR code)</label><br />
+        <label htmlFor="consumer-batch-id">Enter Batch ID (from product QR code)</label><br />
         <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
           <input
+            id="consumer-batch-id"
             value={batchId}
             onChange={(e) => setBatchId(e.target.value)}
             placeholder="e.g. BATCH-2026-001"
@@ -131,22 +157,29 @@ function ConsumerDashboard() {
           <h4>Leave Feedback</h4>
           {feedbackMsg && <p style={{ color: 'green' }}>{feedbackMsg}</p>}
           {feedbackError && <p style={{ color: 'red' }}>{feedbackError}</p>}
-          <label>Your rating (1–10)</label><br />
-          <input
-            type="number" min="1" max="10"
-            step="1"
-            value={feedbackScore}
-            onChange={(e) => setFeedbackScore(e.target.value)}
-            style={{ padding: 6, marginRight: 8 }}
-          />
-          <button
-            type="button"
-            onClick={handleFeedback}
-            disabled={feedbackLoading}
-            style={{ padding: '6px 12px' }}
-          >
-            {feedbackLoading ? 'Submitting...' : 'Submit Feedback'}
-          </button>
+          {feedbackEligibilityLoading && <p>Checking feedback eligibility...</p>}
+          {feedbackEligibility?.reason && <p>{feedbackEligibility.reason}</p>}
+          {feedbackEligibility?.canSubmit && (
+            <>
+              <label htmlFor="feedback-rating">Your rating (1–10)</label><br />
+              <input
+                id="feedback-rating"
+                type="number" min="1" max="10"
+                step="1"
+                value={feedbackScore}
+                onChange={(e) => setFeedbackScore(e.target.value)}
+                style={{ padding: 6, marginRight: 8 }}
+              />
+              <button
+                type="button"
+                onClick={handleFeedback}
+                disabled={feedbackLoading || feedbackEligibilityLoading}
+                style={{ padding: '6px 12px' }}
+              >
+                {feedbackLoading ? 'Submitting...' : 'Submit Feedback'}
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
