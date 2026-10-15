@@ -2,6 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const jwt     = require('jsonwebtoken');
 const User    = require('../models/User');
+const { validateRequest } = require('../middleware/requestValidation');
 
 // ── Helper: generate JWT token ─────────────────────────────────────────────
 const generateToken = (id) => {
@@ -10,25 +11,49 @@ const generateToken = (id) => {
 
 // ── Middleware: protect routes ─────────────────────────────────────────────
 const protect = async (req, res, next) => {
-  let token;
-  if (req.headers.authorization &&
-      req.headers.authorization.startsWith('Bearer')) {
-    try {
-      token      = req.headers.authorization.split(' ')[1];
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      req.user   = await User.findById(decoded.id).select('-password');
-      next();
-    } catch (error) {
-      res.status(401).json({ message: 'Not authorised' });
-    }
+  const authorization = req.headers.authorization;
+  if (!authorization || !authorization.startsWith('Bearer ')) {
+    return res.status(401).json({
+      message: 'No token provided',
+      code: 'UNAUTHORIZED'
+    });
   }
-  if (!token) {
-    res.status(401).json({ message: 'No token provided' });
+
+  let decoded;
+  try {
+    const token = authorization.slice('Bearer '.length);
+    decoded = jwt.verify(token, process.env.JWT_SECRET);
+  } catch (error) {
+    return res.status(401).json({
+      message: 'Not authorised',
+      code: 'UNAUTHORIZED'
+    });
   }
+
+  let user;
+  try {
+    user = await User.findById(decoded.id).select('-password');
+  } catch (error) {
+    return next(error);
+  }
+  if (!user) {
+    return res.status(401).json({
+      message: 'Not authorised',
+      code: 'UNAUTHORIZED'
+    });
+  }
+  req.user = user;
+  return next();
 };
 
 // ── POST /api/auth/register ────────────────────────────────────────────────
-router.post('/register', async (req, res) => {
+router.post('/register', validateRequest({
+  body: {
+    name: { required: true, type: 'string', minLength: 1 },
+    email: { required: true, type: 'string', pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ },
+    password: { required: true, type: 'string', minLength: 1 }
+  }
+}), async (req, res) => {
   try {
     const { name, email, password, role, walletAddress, phone, location } = req.body;
 
@@ -64,7 +89,12 @@ router.post('/register', async (req, res) => {
 });
 
 // ── POST /api/auth/login ───────────────────────────────────────────────────
-router.post('/login', async (req, res) => {
+router.post('/login', validateRequest({
+  body: {
+    email: { required: true, type: 'string', pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ },
+    password: { required: true, type: 'string', minLength: 1 }
+  }
+}), async (req, res) => {
   try {
     const { email, password } = req.body;
 

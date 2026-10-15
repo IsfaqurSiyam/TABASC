@@ -76,7 +76,7 @@ function main() {
   );
   const envPath = path.resolve(
     projectRoot,
-    getOption('--env-file', path.join(projectRoot, '.env'))
+    getOption('--env-file', path.join(projectRoot, 'client', '.env'))
   );
   const addresses = {};
 

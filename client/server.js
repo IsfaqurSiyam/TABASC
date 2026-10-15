@@ -1,81 +1,140 @@
-const express      = require('express');
-const cors         = require('cors');
-const dotenv       = require('dotenv');
-const connectDB    = require('./config/db');
+const config = require('./config/env');
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const { rateLimit } = require('express-rate-limit');
+const mongoose = require('mongoose');
+const connectDB = require('./config/db');
+const { validateContractCode } = require('./blockchain/web3');
+const { errorHandler, notFoundHandler } = require('./middleware/errors');
+const sanitizeMongoInput = require('./middleware/sanitizeMongoInput');
+const { validateJsonBody } = require('./middleware/requestValidation');
 
-// Load environment variables
-dotenv.config();
-
-// Connect to MongoDB
-connectDB();
-
-// Init express
 const app = express();
 
-// ── Middleware ─────────────────────────────────────────────────────────────
-app.use(cors());
-app.use(express.json());
-
-const serializeBigInts = (value) => {
-  if (typeof value === 'bigint') {
-    const numericValue = Number(value);
-    return Number.isSafeInteger(numericValue)
-      ? numericValue
-      : value.toString();
-  }
-
-  return value;
-};
+app.disable('x-powered-by');
+app.use(helmet());
+app.use(cors({
+  origin: (origin, callback) => callback(null, !origin || origin === config.corsOrigin)
+}));
+app.use(express.json({ limit: '1mb' }));
 
 app.use((req, res, next) => {
   const originalJson = res.json.bind(res);
-
   res.json = (body) => {
-    if (typeof body === 'undefined') {
-      return originalJson(body);
-    }
-
-    const safeBody = JSON.parse(
-      JSON.stringify(body, (_, value) => serializeBigInts(value))
-    );
-
+    if (body === undefined) return originalJson(body);
+    const responseBody = res.statusCode >= 400 &&
+      body && typeof body === 'object' && !Array.isArray(body)
+      ? { ...body, code: body.code || 'REQUEST_ERROR' }
+      : body;
+    const safeBody = JSON.parse(JSON.stringify(responseBody, (_, value) => {
+      if (typeof value !== 'bigint') return value;
+      const numericValue = Number(value);
+      return Number.isSafeInteger(numericValue) ? numericValue : value.toString();
+    }));
     return originalJson(safeBody);
   };
-
   next();
 });
 
-// ── Routes ─────────────────────────────────────────────────────────────────
-const { router: authRoutes }   = require('./routes/auth');
-const productRoutes            = require('./routes/products');
-const trackingRoutes           = require('./routes/tracking');
-const reputationRoutes         = require('./routes/reputation');
-const qrRoutes                 = require('./routes/qr');
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    console.log(`${req.method} ${req.path} ${res.statusCode} ${Date.now() - startedAt}ms`);
+  });
+  next();
+});
 
-app.use('/api/auth',       authRoutes);
-app.use('/api/products',   productRoutes);
-app.use('/api/tracking',   trackingRoutes);
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 300,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({
+    message: 'Too many requests; please try again later',
+    code: 'RATE_LIMITED'
+  })
+});
+app.use('/api', apiLimiter);
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({
+    message: 'Too many authentication attempts; please try again later',
+    code: 'RATE_LIMITED'
+  })
+});
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/register', authLimiter);
+
+app.use(sanitizeMongoInput);
+app.use(validateJsonBody);
+
+const { router: authRoutes } = require('./routes/auth');
+const productRoutes = require('./routes/products');
+const trackingRoutes = require('./routes/tracking');
+const reputationRoutes = require('./routes/reputation');
+const qrRoutes = require('./routes/qr');
+const healthRoutes = require('./routes/health');
+
+app.use('/api/auth', authRoutes);
+app.use('/api/products', productRoutes);
+app.use('/api/tracking', trackingRoutes);
 app.use('/api/reputation', reputationRoutes);
-app.use('/api/qr',          qrRoutes);
+app.use('/api/qr', qrRoutes);
+app.use('/api', healthRoutes);
 
-// ── Health check ───────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
   res.json({
     message: 'TABASC API is running',
     version: '1.0.0',
-    status:  'OK'
+    status: 'OK'
   });
 });
 
-// ── Test route ─────────────────────────────────────────────────────────────
-app.post('/test', (req, res) => {
-  res.json({ message: 'test works' });
-});
+app.use(notFoundHandler);
+app.use(errorHandler);
 
-// ── Start server ───────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`MongoDB: ${process.env.MONGO_URI}`);
-  console.log(`Ganache: ${process.env.GANACHE_URL}`);
-});
+const startServer = async () => {
+  await validateContractCode();
+  await connectDB(config.mongoUri);
+
+  return new Promise((resolve, reject) => {
+    const server = app.listen(config.port);
+    server.once('listening', () => resolve(server));
+    server.once('error', reject);
+  });
+};
+
+const shutdown = (server, signal) => {
+  console.log(`Received ${signal}; shutting down`);
+  server.close(async (error) => {
+    if (error) {
+      console.error('HTTP server shutdown failed');
+      process.exitCode = 1;
+    }
+    try {
+      await mongoose.disconnect();
+    } catch (shutdownError) {
+      console.error('Service shutdown failed');
+      process.exitCode = 1;
+    }
+  });
+};
+
+if (require.main === module) {
+  startServer().then((server) => {
+    console.log(`Server running on port ${config.port}`);
+    process.once('SIGINT', () => shutdown(server, 'SIGINT'));
+    process.once('SIGTERM', () => shutdown(server, 'SIGTERM'));
+  }).catch(async (error) => {
+    console.error(`Startup failed: ${error.message}`);
+    await mongoose.disconnect();
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { app, startServer };

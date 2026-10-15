@@ -10,6 +10,34 @@ const {
   getTransactionCost
 } = require('../blockchain/web3');
 
+const getProductIdFromReceipt = (receipt) => {
+  const eventAbi = ProductContract.options.jsonInterface.find(
+    (item) => item.type === 'event' && item.name === 'ProductRegistered'
+  );
+  if (!eventAbi) {
+    throw new Error('ProductRegistered event is missing from the product contract ABI');
+  }
+
+  const eventSignature = web3.eth.abi.encodeEventSignature(eventAbi).toLowerCase();
+  const eventLog = receipt?.logs?.find(
+    (log) => log.topics?.[0]?.toLowerCase() === eventSignature
+  );
+  if (!eventLog) {
+    throw new Error('ProductRegistered event was not found in the transaction receipt');
+  }
+
+  const values = web3.eth.abi.decodeLog(
+    eventAbi.inputs,
+    eventLog.data,
+    eventLog.topics.slice(1)
+  );
+  const productId = BigInt(values.productId);
+  if (productId === 0n || productId > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error('ProductRegistered event contained an invalid product id');
+  }
+  return Number(productId);
+};
+
 // ── POST /api/products/register ────────────────────────────────────────────
 // Farmer registers a new product
 router.post('/register', protect, async (req, res) => {
@@ -54,8 +82,7 @@ router.post('/register', protect, async (req, res) => {
       .registerProduct(name, batchId)
       .send({ from: farmerAccount, gas: 500000 });
 
-    // Web3 v4 receipts do not always expose decoded events.
-    const blockchainId = Number(await ProductContract.methods.getProductCount().call());
+    const blockchainId = getProductIdFromReceipt(tx);
     const gas = await getTransactionCost(tx.transactionHash);
 
     // Save to MongoDB
