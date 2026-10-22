@@ -32,7 +32,7 @@ const run = async () => {
       return;
     }
 
-    const walletOwner = await User.findOne({ walletAddress: adminWallet });
+    const walletOwner = await User.findOne({ walletAddress: adminWallet.toLowerCase() });
     if (walletOwner) {
       throw new Error('Ganache administrator wallet is already assigned to another user');
     }

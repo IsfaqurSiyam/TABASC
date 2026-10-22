@@ -14,6 +14,7 @@ process.env.JWT_EXPIRES_IN = '2h';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Product = require('../models/Product');
+const User = require('../models/User');
 const { validateEnvironment } = require('../config/env');
 const {
   AGREEMENT_VERSION,
@@ -334,6 +335,17 @@ test('product list filters have database indexes', () => {
   for (const field of ['farmer', 'currentOwner', 'currentStatus']) {
     assert.ok(indexes.some((keys) => keys[field] === 1), `${field} should be indexed`);
   }
+});
+
+test('wallet addresses are normalized to lowercase when users are created', () => {
+  const user = new User({
+    name: 'Wallet owner',
+    email: 'wallet@example.test',
+    password: 'password123',
+    role: 'farmer',
+    walletAddress: '0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD'
+  });
+  assert.equal(user.walletAddress, '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd');
 });
 
 test('delivery windows entered in days convert to bounded seconds before hashing and storage', () => {
