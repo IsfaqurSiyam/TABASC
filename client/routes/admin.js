@@ -17,6 +17,7 @@ const {
 } = require('../blockchain/web3');
 const { AppError } = require('../middleware/errors');
 const { validateRequest } = require('../middleware/requestValidation');
+const { assertNoActiveCustody } = require('../services/custodyProtection');
 
 const router = express.Router();
 const assignableRoles = ['farmer', 'distributor', 'retailer', 'inspector'];
@@ -168,6 +169,11 @@ router.patch('/users/:id/role', validateRequest({
         .send({ from: req.adminWallet });
       txHash = receipt.transactionHash;
     } else if (action === 'revoke' && alreadyGranted) {
+      await assertNoActiveCustody(
+        target.walletAddress,
+        ProductContract,
+        TrackingContract
+      );
       const receipt = await RoleRegistryContract.methods
         .revokeRole(roleId, target.walletAddress)
         .send({ from: req.adminWallet });
@@ -214,6 +220,13 @@ router.patch('/users/:id/active', validateRequest({
     }
     if (target.role === 'admin' && !req.body.isActive) {
       throw new AppError(400, 'ADMIN_DEACTIVATION_BLOCKED', 'An admin account cannot be deactivated here');
+    }
+    if (!req.body.isActive) {
+      await assertNoActiveCustody(
+        target.walletAddress,
+        ProductContract,
+        TrackingContract
+      );
     }
     target.isActive = req.body.isActive;
     if (req.body.isActive) {

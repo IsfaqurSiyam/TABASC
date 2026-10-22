@@ -35,6 +35,10 @@ const {
   saveBatchReputationScore
 } = require('../services/reputationScores');
 const {
+  assertNoActiveCustody,
+  getActiveCustodyProductIds
+} = require('../services/custodyProtection');
+const {
   archiveDisplacedProduct,
   assertProductRegistrationTarget
 } = require('../services/productRegistrationSync');
@@ -354,6 +358,37 @@ test('delivery windows entered in days convert to bounded seconds before hashing
     };
     assert.equal(getFinalizedBatchScore(receipt, 7, stakeholder), 9100);
     assert.throws(() => getFinalizedBatchScore(receipt, 8, stakeholder), /does not match/);
+  });
+
+  test('custody loss is blocked only for products that are not final', async () => {
+    const wallet = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const custodians = [wallet, wallet, '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'];
+    const statuses = [2, 5, 3];
+    const productContract = {
+      methods: {
+        productCount: () => ({ call: async () => custodians.length }),
+        custodianOf: (id) => ({ call: async () => custodians[id - 1] })
+      }
+    };
+    const trackingContract = {
+      methods: {
+        getCurrentStatus: (id) => ({ call: async () => statuses[id - 1] })
+      }
+    };
+
+    assert.deepEqual(
+      await getActiveCustodyProductIds(wallet, productContract, trackingContract),
+      [1]
+    );
+    await assert.rejects(
+      () => assertNoActiveCustody(wallet, productContract, trackingContract),
+      (error) => error.status === 409 &&
+        error.code === 'USER_HOLDS_ACTIVE_CUSTODY' &&
+        error.message.includes('1')
+    );
+    await assert.doesNotReject(() =>
+      assertNoActiveCustody('0xcccccccccccccccccccccccccccccccccccccccc', productContract, trackingContract)
+    );
   });
   assert.equal(fields.deliveryWindow, 259200);
 });
