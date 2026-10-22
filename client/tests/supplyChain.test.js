@@ -23,6 +23,7 @@ const {
 const {
   canonicalJson,
   canonicalProductFields,
+  deliveryWindowDaysToSeconds,
   hashRecord,
   isExpired,
   trackingHash
@@ -276,6 +277,20 @@ test('canonical product hashing normalizes product values deterministically', ()
 
   const changed = canonicalProductFields({ ...fixtureProduct(), quantity: '13' });
   assert.notEqual(hashRecord(normalized), hashRecord(changed));
+});
+
+test('delivery windows entered in days convert to bounded seconds before hashing and storage', () => {
+  assert.equal(deliveryWindowDaysToSeconds(3), 259200);
+  assert.equal(deliveryWindowDaysToSeconds(1), 86400);
+  assert.equal(deliveryWindowDaysToSeconds(365), 31536000);
+  assert.throws(() => deliveryWindowDaysToSeconds(0), /1 to 365 days/);
+  assert.throws(() => deliveryWindowDaysToSeconds(366), /1 to 365 days/);
+
+  const fields = canonicalProductFields({
+    ...fixtureProduct(),
+    deliveryWindow: deliveryWindowDaysToSeconds(3)
+  });
+  assert.equal(fields.deliveryWindow, 259200);
 });
 
 test('expiry checks treat the supplied expiry date as valid through that UTC day', () => {

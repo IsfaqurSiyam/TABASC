@@ -22,6 +22,7 @@ const {
   STATUS_MAP,
   canonicalProductFields,
   currentChainState,
+  deliveryWindowDaysToSeconds,
   hashRecord,
   isExpired,
   loadEncryptedWallet,
@@ -189,7 +190,7 @@ router.post('/register', protect, validateRequest({
     category: { type: 'string', enum: categories },
     quantity: { required: true, type: 'number', min: Number.MIN_VALUE },
     unit: { type: 'string', minLength: 1 },
-    deliveryWindow: { required: true, type: 'number', min: 1 },
+    deliveryWindow: { required: true, type: 'number', min: 1, max: 365 },
     harvestDate: { type: 'string' },
     expiryDate: { type: 'string' },
     description: { type: 'string' }
@@ -207,16 +208,17 @@ router.post('/register', protect, validateRequest({
     const name = req.body.name.trim();
     const batchId = req.body.batchId.trim();
     const quantity = Number(req.body.quantity);
-    const deliveryWindow = Number(req.body.deliveryWindow);
+    const deliveryWindowDays = Number(req.body.deliveryWindow);
     const unit = (req.body.unit || 'kg').trim();
     const category = req.body.category || 'other';
     const harvestDate = parseDate(req.body.harvestDate, 'harvestDate');
     const expiryDate = parseDate(req.body.expiryDate, 'expiryDate');
 
     if (!name || !batchId || !unit || !Number.isFinite(quantity) ||
-        quantity <= 0 || !Number.isSafeInteger(deliveryWindow) || deliveryWindow < 1) {
+        quantity <= 0 || !Number.isSafeInteger(deliveryWindowDays)) {
       throw new AppError(400, 'VALIDATION_ERROR', 'Product fields and delivery window are invalid');
     }
+    const deliveryWindow = deliveryWindowDaysToSeconds(deliveryWindowDays);
     if (expiryDate && harvestDate && expiryDate <= harvestDate) {
       throw new AppError(400, 'INVALID_DATE_RANGE', 'Expiry date must be after harvest date');
     }

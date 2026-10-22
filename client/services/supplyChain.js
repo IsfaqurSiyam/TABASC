@@ -20,6 +20,13 @@ const sortKeys = (value) => {
 const canonicalJson = (value) => JSON.stringify(sortKeys(value));
 const hashRecord = (value) => web3.utils.keccak256(canonicalJson(value));
 
+const deliveryWindowDaysToSeconds = (value) => {
+  if (!Number.isInteger(value) || value < 1 || value > 365) {
+    throw new AppError(400, 'INVALID_DELIVERY_WINDOW', 'Delivery window must be from 1 to 365 days');
+  }
+  return value * 24 * 60 * 60;
+};
+
 const canonicalProductFields = (product) => ({
   batchId: String(product.batchId).trim(),
   category: product.category || 'other',
@@ -159,6 +166,7 @@ module.exports = {
   canonicalJson,
   canonicalProductFields,
   currentChainState,
+  deliveryWindowDaysToSeconds,
   hashRecord,
   isExpired,
   loadEncryptedWallet,
