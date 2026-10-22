@@ -33,7 +33,12 @@ const {
   trackingHash
 } = require('../services/supplyChain');
 const { assertChainRole, assertFarmerRole } = require('../services/roleAuthorization');
-const { assertSufficientBalance } = require('../blockchain/wallets');
+const {
+  applyGasMargin,
+  assertSufficientBalance,
+  mapContractRevert
+} = require('../blockchain/wallets');
+const { web3 } = require('../blockchain/web3');
 const {
   getFinalizedBatchScore,
   saveBatchReputationScore
@@ -120,6 +125,23 @@ test('transaction balance checks use estimated gas rather than oversized fixed l
     () => assertSufficientBalance(1_200_000n, 50_000n, 20n, 200_001n),
     (error) => error.code === 'INSUFFICIENT_GAS_FUNDS'
   );
+});
+
+test('transaction gas estimates include a 20 percent margin', () => {
+  assert.equal(applyGasMargin(100n), 120n);
+  assert.equal(applyGasMargin(1n), 2n);
+});
+
+test('common custom contract reverts map to actionable API errors', () => {
+  const selector = web3.utils.keccak256('DuplicateBatch()').slice(0, 10);
+  const mapped = mapContractRevert({
+    name: 'ContractExecutionError',
+    code: 310,
+    cause: { data: `${selector}00000000` }
+  });
+  assert.equal(mapped.status, 409);
+  assert.equal(mapped.code, 'DUPLICATE_BATCH');
+  assert.match(mapped.message, /batch ID already exists/i);
 });
 
 test('product reconciliation refuses to overwrite a different record using the same chain ID', () => {

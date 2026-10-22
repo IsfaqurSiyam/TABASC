@@ -3,6 +3,68 @@ const { web3, getAccounts } = require('./web3');
 const { AppError } = require('../middleware/errors');
 
 const transactionQueues = new Map();
+const revertResponses = {
+  Unauthorized: [403, 'BLOCKCHAIN_UNAUTHORIZED', 'This wallet is not authorized for the requested blockchain action'],
+  ProductNotFound: [404, 'PRODUCT_NOT_FOUND', 'Product was not found on the blockchain'],
+  ProductRecalled: [409, 'PRODUCT_RECALLED', 'Recalled products cannot be changed or scored'],
+  DuplicateBatch: [409, 'DUPLICATE_BATCH', 'That batch ID already exists on the blockchain'],
+  InvalidRecipientRole: [403, 'RECIPIENT_ROLE_REQUIRED', 'The selected recipient does not have the required blockchain role'],
+  InvalidNextStatus: [409, 'INVALID_PRODUCT_STATE', 'The product cannot move to that shipment status'],
+  InvalidHandoverStatus: [409, 'INVALID_PRODUCT_STATE', 'The product cannot be handed over at its current stage'],
+  AlreadyFinalized: [409, 'SCORE_ALREADY_FINALIZED', 'This stakeholder score has already been finalized'],
+  ProductNotSold: [409, 'PRODUCT_NOT_SOLD', 'This action requires a sold product'],
+  NotBuyer: [403, 'NOT_RECORDED_BUYER', 'Only the recorded buyer can submit product feedback'],
+  AlreadyReviewed: [409, 'FEEDBACK_ALREADY_RECORDED', 'Feedback has already been recorded for this product'],
+  InvalidDeliveryWindow: [400, 'INVALID_DELIVERY_WINDOW', 'The delivery window exceeds the maximum allowed duration'],
+  InspectionRequired: [409, 'INSPECTION_REQUIRED', 'An inspection is required before finalizing this score'],
+  SelfInspection: [403, 'SELF_INSPECTION', 'A supply-chain participant cannot inspect their own product']
+};
+const revertSelectors = new Map(
+  Object.keys(revertResponses).map((name) => [
+    web3.utils.keccak256(`${name}()`).slice(0, 10).toLowerCase(),
+    name
+  ])
+);
+
+const findRevertData = (value, depth = 0) => {
+  if (typeof value === 'string' && /^0x[0-9a-f]{8,}$/i.test(value)) {
+    return value;
+  }
+  if (!value || typeof value !== 'object' || depth >= 5) {
+    return null;
+  }
+  for (const nested of Object.values(value)) {
+    const data = findRevertData(nested, depth + 1);
+    if (data) return data;
+  }
+  return null;
+};
+
+const mapContractRevert = (error) => {
+  const data = findRevertData(error?.data) || findRevertData(error?.cause);
+  let revertName = data ? revertSelectors.get(data.slice(0, 10).toLowerCase()) : null;
+  if (!revertName) {
+    const message = `${error?.message || ''} ${error?.cause?.message || ''}`;
+    revertName = Object.keys(revertResponses).find((name) =>
+      new RegExp(`\\b${name}\\b`).test(message)
+    );
+  }
+  if (revertName) {
+    const [status, code, message] = revertResponses[revertName];
+    return new AppError(status, code, message);
+  }
+  if (error?.code === 310 || error?.name === 'ContractExecutionError' ||
+      /execution reverted|vm exception while processing transaction/i.test(error?.message || '')) {
+    return new AppError(
+      409,
+      'BLOCKCHAIN_STATE_CONFLICT',
+      'The blockchain rejected this action for the current product state or account permissions'
+    );
+  }
+  return error;
+};
+
+const applyGasMargin = (estimate) => (BigInt(estimate) * 120n + 99n) / 100n;
 
 const assertSufficientBalance = (balance, gas, gasPrice, value = '0') => {
   const requiredBalance = BigInt(gas) * BigInt(gasPrice) + BigInt(value);
@@ -78,21 +140,15 @@ const sendFromWallet = async (encryptedKeystore, transaction, passphrase = confi
     const transactionValue = transaction.value || '0';
     let gas;
     try {
-      gas = await web3.eth.estimateGas({
+      const estimate = await web3.eth.estimateGas({
         from: account.address,
         to: transaction.to,
         data: transaction.data || '0x',
         value: transactionValue
       });
+      gas = applyGasMargin(estimate);
     } catch (error) {
-      if (error.code === 310 || error.name === 'ContractExecutionError') {
-        throw new AppError(
-          409,
-          'BLOCKCHAIN_STATE_CONFLICT',
-          'The blockchain rejected this action for the current product state or account permissions'
-        );
-      }
-      throw error;
+      throw mapContractRevert(error);
     }
     const gasPrice = transaction.gasPrice || await web3.eth.getGasPrice();
     const balance = BigInt(await web3.eth.getBalance(account.address));
@@ -120,5 +176,7 @@ module.exports = {
   sendFromWallet,
   unlockWallet,
   withWalletQueue,
+  applyGasMargin,
+  mapContractRevert,
   assertSufficientBalance
 };
