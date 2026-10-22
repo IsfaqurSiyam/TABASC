@@ -90,9 +90,13 @@ duration is verified by chain timestamps. The new contract ABI requires the
 full compile, migration, environment sync, and role sync sequence above.
 On-chain text is limited to 120 UTF-8 bytes for product names and locations,
 64 bytes for batch IDs, and 500 bytes for shipment notes and recall reasons.
-Consumer feedback is accepted only from the wallet recorded as the buyer of a
-sold, non-recalled product. Reputation writes with pending database
-synchronization return `202` and are retried by the same reconciliation command.
+Consumer feedback is accepted only from the confirmed buyer of a sold,
+non-recalled product and must be submitted within 14 days after the on-chain
+Sold timestamp. Inspectors can finalize after feedback arrives or after the
+14-day feedback window expires. Stakeholder trust labels remain `Unrated`
+until three finalized batches exist; numeric scores remain visible before that
+evidence threshold. Reputation writes with pending database synchronization
+return `202` and are retried by the same reconciliation command.
 
 Create the first administrator with `npm run seed:admin --prefix client`.
 After a contract redeployment, restore approved on-chain roles with

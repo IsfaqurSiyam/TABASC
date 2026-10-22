@@ -37,6 +37,7 @@ interface IReputationTracking {
 /// stakeholder reputations in basis points.
 contract ReputationContract {
     uint256 public constant FEEDBACK_WINDOW = 14 days;
+    uint256 public constant MIN_BATCHES_FOR_TRUST = 3;
 
     struct Inspection {
         uint16 quality;
@@ -250,7 +251,7 @@ contract ReputationContract {
     /// @notice Returns the configured trust level for a stakeholder.
     function getTrustLevel(address stakeholder) external view returns (string memory) {
         Reputation storage reputation = _reputations[stakeholder];
-        if (!reputation.exists) return "Unrated";
+        if (!reputation.exists || reputation.batches < MIN_BATCHES_FOR_TRUST) return "Unrated";
         return trustLevelForScore(reputation.scoreBps);
     }
 

@@ -492,8 +492,24 @@ contract('TABASC contracts', (accounts) => {
     await reputation.finalizeScore(id, farmer, { from: inspector });
     await expectRevert(reputation.finalizeScore(id, farmer, { from: inspector }));
     assert.equal((await reputation.getHistory(farmer)).length, 1);
-    assert.equal(await reputation.getTrustLevel(farmer), 'Excellent');
+    assert.equal(await reputation.getTrustLevel(farmer), 'Unrated');
     assert.equal(await reputation.getTrustLevel(outsider), 'Unrated');
+  });
+
+  it('withholds stakeholder trust labels until three finalized batches', async () => {
+    for (let index = 1; index <= 3; index++) {
+      const id = await registerProduct(1000);
+      await prepareDelivery(id, 20);
+      await sellProduct(id);
+      await reputation.recordInspection(id, 10000, 10000, { from: inspector });
+      await reputation.submitFeedback(id, 0, 10000, { from: buyer });
+      await reputation.finalizeScore(id, farmer, { from: inspector });
+      assert.equal(
+        await reputation.getTrustLevel(farmer),
+        index === 3 ? 'Excellent' : 'Unrated'
+      );
+    }
+    assert.equal((await reputation.getReputation(farmer)).batches.toString(), '3');
   });
 
   it('finalizes one inspection for each actual journey participant', async () => {
