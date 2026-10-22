@@ -13,6 +13,7 @@ process.env.JWT_EXPIRES_IN = '2h';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const Product = require('../models/Product');
 const { validateEnvironment } = require('../config/env');
 const {
   AGREEMENT_VERSION,
@@ -317,6 +318,13 @@ test('public product serialization excludes QR payloads and wallet identifiers',
   assert.equal('email' in publicProduct.farmer, false);
   assert.equal('walletAddress' in publicProduct.farmer, false);
   assert.equal('qrCode' in serializeProduct(product), false);
+});
+
+test('product list filters have database indexes', () => {
+  const indexes = Product.schema.indexes().map(([keys]) => keys);
+  for (const field of ['farmer', 'currentOwner', 'currentStatus']) {
+    assert.ok(indexes.some((keys) => keys[field] === 1), `${field} should be indexed`);
+  }
 });
 
 test('delivery windows entered in days convert to bounded seconds before hashing and storage', () => {

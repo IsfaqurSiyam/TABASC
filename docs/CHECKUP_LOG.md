@@ -43,7 +43,7 @@ contract artifacts already existed in the working tree.
 | M5.2 | UNVERIFIED | Product API defaults to 25 and clients ignore `X-Total-Count`, but the local database has only one active product and there is no browser session to inspect a >25-product view. | Leave pagination/display unchanged until an isolated >25-product UI scenario can be run. | — |
 | M6 | CONFIRMED | Fresh Git archive with dependencies resolved externally initially failed `npm test --prefix client` on missing `build/contracts/RoleRegistry.json`. The client Truffle command reported 0 tests; repo-root command found 20. A second fresh Git archive after the fix compiled contracts through `pretest` and passed all 18 then-current backend tests. | Fixed by declaring Truffle 5.11.5 at root, anchoring Truffle's test directory, forwarding client contract commands to root, and compiling in client `pretest`. Setup docs now require root `npm ci`. Validation after fix: contracts 20, backend 18 at M6 commit (19 after M2), frontend 11; production build passed. | 3a60e1c |
 | M7 | CONFIRMED | `npm audit --prefix frontend` reported high-severity `follow-redirects` 1.16.0 advisories; `npm audit --prefix client` reported zero vulnerabilities. | Applied frontend-only audit fix to `follow-redirects` 1.16.1. Both audits now report zero vulnerabilities. After fix: contracts 20, backend 19, frontend 11; production build passed. | pending |
-| M8 | CONFIRMED | Live Product collection indexes are `_id`, `blockchainId`, and `batchId`; no `farmer`, `currentOwner`, or `currentStatus` index exists. Active product count was one. | Pending schema indexes; document unbounded on-chain arrays as a scale limitation. | — |
+| M8 | CONFIRMED | Live Product collection indexes were `_id`, `blockchainId`, and `batchId`; no `farmer`, `currentOwner`, or `currentStatus` index existed. Active product count was one. | Added individual Product schema indexes for `farmer`, `currentOwner`, and `currentStatus`, with a schema-index regression test. MongoDB builds declared indexes when the model initializes; no live migration was run. Documented that tracking/reputation contract arrays remain unbounded. After fix: contracts 20, backend 20, frontend 11; production build passed. | pending |
 | L1 | CONFIRMED | QR route catches return `error.message` in 500 responses instead of forwarding to central handler. | Pending central error-handler use. | — |
 | L2 | CONFIRMED | `ProductScan` interpolates route `batchId` directly; consumer product lookup also interpolates it directly. | Pending URL encoding for both lookups. | — |
 | L3 | CONFIRMED | Product QR URLs are built from `CORS_ORIGIN`; no `PUBLIC_APP_URL` config exists. | Pending dedicated public URL config with a backward-compatible local fallback. | — |
@@ -78,3 +78,9 @@ documents. If a chain transaction succeeds while the database write is
 pending or permanently fails, the public journey can temporarily omit or
 continue to omit those events until reconciliation succeeds. A chain-log
 indexer is a future reliability improvement and was not added here.
+
+## M8 on-chain scale limitation
+
+Tracking and reputation histories use on-chain arrays that grow with every
+record and are not paginated or bounded. MongoDB query indexes improve local
+product lookups but do not address contract storage growth or read cost.
