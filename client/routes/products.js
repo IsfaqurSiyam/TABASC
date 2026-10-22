@@ -186,8 +186,8 @@ const handlePendingSync = async (res, details) => {
 
 router.post('/register', protect, validateRequest({
   body: {
-    name: { required: true, type: 'string', minLength: 1 },
-    batchId: { required: true, type: 'string', minLength: 1 },
+    name: { required: true, type: 'string', minLength: 1, maxLength: 120 },
+    batchId: { required: true, type: 'string', minLength: 1, maxLength: 64 },
     category: { type: 'string', enum: categories },
     quantity: { required: true, type: 'number', min: Number.MIN_VALUE },
     unit: { type: 'string', minLength: 1 },

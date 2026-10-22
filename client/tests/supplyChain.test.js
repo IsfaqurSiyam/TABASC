@@ -47,6 +47,7 @@ const {
   assertNoActiveCustody,
   getActiveCustodyProductIds
 } = require('../services/custodyProtection');
+const { validateRequest } = require('../middleware/requestValidation');
 const {
   archiveDisplacedProduct,
   assertProductRegistrationTarget
@@ -368,6 +369,19 @@ test('wallet addresses are normalized to lowercase when users are created', () =
     walletAddress: '0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD'
   });
   assert.equal(user.walletAddress, '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd');
+});
+
+test('request maxLength validation counts UTF-8 bytes like Solidity strings', () => {
+  let validationError;
+  validateRequest({
+    body: { notes: { type: 'string', maxLength: 3 } }
+  })(
+    { body: { notes: 'éé' }, params: {}, query: {} },
+    {},
+    (error) => { validationError = error; }
+  );
+  assert.equal(validationError.code, 'VALIDATION_ERROR');
+  assert.match(validationError.message, /too long/i);
 });
 
 test('delivery windows entered in days convert to bounded seconds before hashing and storage', () => {

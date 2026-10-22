@@ -70,6 +70,8 @@ MongoDB write fails, the API records a pending sync and returns `202`; rerun
 reconciliation result and remaining pending-sync count are available from the
 admin overview. Inspector scoring records immutable quality and compliance
 values on-chain, then finalizes a score only for an actual journey participant.
+On-chain text is limited to 120 UTF-8 bytes for product names and locations,
+64 bytes for batch IDs, and 500 bytes for shipment notes and recall reasons.
 Consumer feedback is accepted only from the wallet recorded as the buyer of a
 sold, non-recalled product. Reputation writes with pending database
 synchronization return `202` and are retried by the same reconciliation command.

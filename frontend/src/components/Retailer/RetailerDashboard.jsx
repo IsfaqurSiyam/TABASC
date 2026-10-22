@@ -103,13 +103,13 @@ function RetailerDashboard() {
 
         <div style={{ marginBottom: 10 }}>
           <label>Store Location</label><br />
-          <input value={location} onChange={(e) => setLocation(e.target.value)} required
+          <input value={location} onChange={(e) => setLocation(e.target.value)} required maxLength={120}
             style={{ width: '100%', padding: 6 }} placeholder="e.g. Gulshan Fresh Mart" />
         </div>
 
         <div style={{ marginBottom: 10 }}>
           <label>Notes (optional — flag quality issues here)</label><br />
-          <input value={notes} onChange={(e) => setNotes(e.target.value)}
+          <input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={500}
             style={{ width: '100%', padding: 6 }} placeholder="e.g. minor bruising on 5% of batch" />
         </div>
 

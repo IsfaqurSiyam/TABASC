@@ -72,8 +72,8 @@ router.post('/update', protect, validateRequest({
   body: {
     blockchainId: { required: true, type: 'number', min: 1 },
     status: { required: true, type: 'string', enum: STATUS_LABELS },
-    location: { required: true, type: 'string', minLength: 1 },
-    notes: { type: 'string' }
+    location: { required: true, type: 'string', minLength: 1, maxLength: 120 },
+    notes: { type: 'string', maxLength: 500 }
   }
 }), async (req, res, next) => {
   let receipt;
@@ -326,7 +326,7 @@ router.post('/:id/buyer', protect, validateRequest({
 
 router.post('/:id/recall', protect, validateRequest({
   params: { id: { required: true, type: 'string' } },
-  body: { reason: { required: true, type: 'string', minLength: 1 } }
+  body: { reason: { required: true, type: 'string', minLength: 1, maxLength: 500 } }
 }), async (req, res, next) => {
   try {
     if (req.user.role !== 'inspector') {

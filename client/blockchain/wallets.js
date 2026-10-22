@@ -17,6 +17,7 @@ const revertResponses = {
   AlreadyReviewed: [409, 'FEEDBACK_ALREADY_RECORDED', 'Feedback has already been recorded for this product'],
   InvalidDeliveryWindow: [400, 'INVALID_DELIVERY_WINDOW', 'The delivery window exceeds the maximum allowed duration'],
   InspectionRequired: [409, 'INSPECTION_REQUIRED', 'An inspection is required before finalizing this score'],
+  FieldTooLong: [400, 'FIELD_TOO_LONG', 'One or more on-chain text fields exceed their maximum length'],
   SelfInspection: [403, 'SELF_INSPECTION', 'A supply-chain participant cannot inspect their own product']
 };
 const revertSelectors = new Map(

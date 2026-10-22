@@ -21,6 +21,10 @@ interface ITrackingProduct {
 /// @title TrackingContract
 /// @notice Enforces forward-only shipment updates, custody and safety recalls.
 contract TrackingContract {
+    uint256 private constant MAX_LOCATION_BYTES = 120;
+    uint256 private constant MAX_NOTES_BYTES = 500;
+    uint256 private constant MAX_RECALL_REASON_BYTES = 500;
+
     enum Status {
         Harvested,
         PickedUp,
@@ -59,6 +63,7 @@ contract TrackingContract {
     error SameCustodian();
     error InvalidNextStatus();
     error EmptyLocation();
+    error FieldTooLong();
     error ProductRecalled();
     error AlreadyRecalled();
     error EmptyRecallReason();
@@ -128,6 +133,10 @@ contract TrackingContract {
         _requireNotRecalled(productId);
         if (msg.sender != product.custodianOf(productId)) revert Unauthorized();
         if (bytes(location).length == 0) revert EmptyLocation();
+        if (
+            bytes(location).length > MAX_LOCATION_BYTES ||
+            bytes(notes).length > MAX_NOTES_BYTES
+        ) revert FieldTooLong();
         if (uint8(next) != uint8(_currentStatus[productId]) + 1) revert InvalidNextStatus();
 
         if (
@@ -177,6 +186,7 @@ contract TrackingContract {
         if (!registry.hasRole(registry.INSPECTOR_ROLE(), msg.sender)) revert Unauthorized();
         if (_recalled[productId]) revert AlreadyRecalled();
         if (bytes(reason).length == 0) revert EmptyRecallReason();
+        if (bytes(reason).length > MAX_RECALL_REASON_BYTES) revert FieldTooLong();
         _recalled[productId] = true;
         _recallReason[productId] = reason;
         emit RecallIssued(productId, msg.sender, reason, block.timestamp);

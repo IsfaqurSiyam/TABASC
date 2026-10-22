@@ -12,16 +12,18 @@ contract('TABASC contracts', (accounts) => {
   let batchNumber;
 
   async function expectRevert(action) {
+    let revertError;
     try {
       await action;
-      assert.fail('Expected transaction to revert');
     } catch (error) {
-      assert(
-        error.message.toLowerCase().includes('revert') ||
-          error.message.toLowerCase().includes('custom error'),
-        `Expected a revert, received: ${error.message}`
-      );
+      revertError = error;
     }
+    assert(revertError, 'Expected transaction to revert');
+    assert(
+      revertError.message.toLowerCase().includes('revert') ||
+        revertError.message.toLowerCase().includes('custom error'),
+      `Expected a revert, received: ${revertError.message}`
+    );
   }
 
   async function rpc(method, params = []) {
@@ -147,6 +149,47 @@ contract('TABASC contracts', (accounts) => {
     await expectRevert(product.farmerOf(0));
     await expectRevert(product.custodianOf(2));
     assert.equal((await product.productCount()).toString(), '1');
+  });
+
+  it('rejects product and tracking strings that exceed storage limits', async () => {
+    const id = await registerProduct();
+    const hash = web3.utils.keccak256('oversized');
+    await expectRevert(product.registerProduct(
+      'n'.repeat(121),
+      'LONG-NAME',
+      hash,
+      10,
+      { from: farmer }
+    ));
+    await expectRevert(product.registerProduct(
+      'Product',
+      'b'.repeat(65),
+      hash,
+      10,
+      { from: farmer }
+    ));
+    await tracking.handover(id, distributor, { from: farmer });
+    await expectRevert(tracking.updateShipment(
+      id,
+      1,
+      'l'.repeat(121),
+      '',
+      hash,
+      { from: distributor }
+    ));
+    await expectRevert(tracking.updateShipment(
+      id,
+      1,
+      'Farm',
+      'n'.repeat(501),
+      hash,
+      { from: distributor }
+    ));
+    await expectRevert(tracking.recall(
+      id,
+      'r'.repeat(501),
+      { from: inspector }
+    ));
   });
 
   it('sets the tracking contract only once and restricts custodian updates to tracking', async () => {

@@ -115,6 +115,7 @@ function SupplyChainActions({ products, role, onComplete }) {
             onChange={(event) => setReason(event.target.value)}
             required
             minLength={1}
+            maxLength={500}
             rows={3}
           />
         </>

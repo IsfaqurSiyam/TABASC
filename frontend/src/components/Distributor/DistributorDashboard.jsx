@@ -105,13 +105,13 @@ function DistributorDashboard() {
 
         <div style={{ marginBottom: 10 }}>
           <label>Location</label><br />
-          <input value={location} onChange={(e) => setLocation(e.target.value)} required
+          <input value={location} onChange={(e) => setLocation(e.target.value)} required maxLength={120}
             style={{ width: '100%', padding: 6 }} placeholder="e.g. Dhaka Distribution Hub" />
         </div>
 
         <div style={{ marginBottom: 10 }}>
           <label>Notes (optional)</label><br />
-          <input value={notes} onChange={(e) => setNotes(e.target.value)}
+          <input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={500}
             style={{ width: '100%', padding: 6 }} />
         </div>
 
