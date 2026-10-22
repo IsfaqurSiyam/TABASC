@@ -17,6 +17,8 @@ const revertResponses = {
   CareIssueExplanationTooShort: [400, 'CARE_ISSUE_EXPLANATION_TOO_SHORT', 'Explain any failed care checklist item in at least 20 UTF-8 bytes'],
   AlreadyFinalized: [409, 'SCORE_ALREADY_FINALIZED', 'This stakeholder score has already been finalized'],
   ProductNotSold: [409, 'PRODUCT_NOT_SOLD', 'This action requires a sold product'],
+  FeedbackWindowOpen: [409, 'FEEDBACK_WINDOW_OPEN', 'Feedback remains open; finalize after feedback is submitted or the 14-day post-sale window ends'],
+  FeedbackWindowClosed: [409, 'FEEDBACK_WINDOW_CLOSED', 'The 14-day post-sale feedback window has closed'],
   NotBuyer: [403, 'NOT_RECORDED_BUYER', 'Only the recorded buyer can submit product feedback'],
   AlreadyReviewed: [409, 'FEEDBACK_ALREADY_RECORDED', 'Feedback has already been recorded for this product'],
   InvalidDeliveryWindow: [400, 'INVALID_DELIVERY_WINDOW', 'The delivery window exceeds the maximum allowed duration'],

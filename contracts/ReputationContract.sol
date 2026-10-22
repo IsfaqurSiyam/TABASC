@@ -36,6 +36,8 @@ interface IReputationTracking {
 /// @notice Computes inspectable batch scores and exponentially accumulated
 /// stakeholder reputations in basis points.
 contract ReputationContract {
+    uint256 public constant FEEDBACK_WINDOW = 14 days;
+
     struct Inspection {
         uint16 quality;
         uint16 compliance;
@@ -96,6 +98,8 @@ contract ReputationContract {
     error InvalidDeliveryWindow();
     error SelfInspection();
     error ProductRecalled();
+    error FeedbackWindowOpen();
+    error FeedbackWindowClosed();
 
     event InspectionRecorded(
         uint256 indexed productId,
@@ -160,6 +164,8 @@ contract ReputationContract {
         if (tracking.getCurrentStatus(productId) != IReputationTracking.Status.Sold) {
             revert ProductNotSold();
         }
+        uint256 soldAt = tracking.actedAtOf(productId, IReputationTracking.Status.Sold);
+        if (block.timestamp > soldAt + FEEDBACK_WINDOW) revert FeedbackWindowClosed();
         if (tracking.buyerOf(productId) != msg.sender) revert NotBuyer();
         if (complaint > 10000 || satisfaction > 10000) revert InvalidScore();
         if (_feedback[productId].exists) revert AlreadyReviewed();
@@ -180,6 +186,9 @@ contract ReputationContract {
         _requireInspector();
         if (tracking.isRecalled(productId)) revert ProductRecalled();
         if (!_inspections[productId].exists) revert InspectionRequired();
+        if (tracking.getCurrentStatus(productId) != IReputationTracking.Status.Sold) {
+            revert ProductNotSold();
+        }
         if (isParticipant(productId, _inspections[productId].inspector)) {
             revert SelfInspection();
         }
@@ -188,6 +197,10 @@ contract ReputationContract {
 
         Inspection storage inspection = _inspections[productId];
         Feedback storage feedback = _feedback[productId];
+        uint256 soldAt = tracking.actedAtOf(productId, IReputationTracking.Status.Sold);
+        if (!feedback.exists && block.timestamp <= soldAt + FEEDBACK_WINDOW) {
+            revert FeedbackWindowOpen();
+        }
         bool hasDelivery =
             uint8(tracking.getCurrentStatus(productId)) >= uint8(IReputationTracking.Status.Delivered);
         uint256[5] memory values;

@@ -153,6 +153,14 @@ test('common custom contract reverts map to actionable API errors', () => {
   });
   assert.equal(careError.code, 'CARE_ISSUE_EXPLANATION_TOO_SHORT');
   assert.match(careError.message, /20 UTF-8 bytes/);
+
+  const windowSelector = web3.utils.keccak256('FeedbackWindowOpen()').slice(0, 10);
+  const windowError = mapContractRevert({
+    name: 'ContractExecutionError',
+    code: 310,
+    cause: { data: `${windowSelector}00000000` }
+  });
+  assert.equal(windowError.code, 'FEEDBACK_WINDOW_OPEN');
 });
 
 test('care attestation responses convert chain timestamps to ISO dates', () => {

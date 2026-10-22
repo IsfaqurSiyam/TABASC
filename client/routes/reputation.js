@@ -200,6 +200,29 @@ router.post('/score', protect, validateRequest({
       throw new AppError(409, 'SCORE_ALREADY_FINALIZED', 'This participant already has a finalized score for this product');
     }
 
+    const status = Number(await TrackingContract.methods
+      .getCurrentStatus(product.blockchainId)
+      .call());
+    if (status !== 5) {
+      throw new AppError(409, 'PRODUCT_NOT_SOLD', 'A reputation score can be finalized only after the product is sold');
+    }
+    const feedback = await ReputationContract.methods.getFeedback(product.blockchainId).call();
+    if (!(feedback.exists === true || feedback.exists === 'true' ||
+          feedback[4] === true || feedback[4] === 'true')) {
+      const soldAt = Number(await TrackingContract.methods
+        .actedAtOf(product.blockchainId, 5)
+        .call());
+      const latestBlock = await web3.eth.getBlock('latest');
+      const eligibleAt = soldAt + 14 * 24 * 60 * 60;
+      if (Number(latestBlock.timestamp) <= eligibleAt) {
+        throw new AppError(
+          409,
+          'FEEDBACK_WINDOW_OPEN',
+          `Feedback remains open; score finalization is available after ${new Date(eligibleAt * 1000).toISOString()}`
+        );
+      }
+    }
+
     const finalize = ReputationContract.methods.finalizeScore(
       product.blockchainId,
       req.body.stakeholderWallet

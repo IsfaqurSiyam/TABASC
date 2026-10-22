@@ -435,18 +435,31 @@ contract('TABASC contracts', (accounts) => {
     assert.equal((await reputation.getHistory(farmer)).length, 0);
   });
 
-  it('reproduces finalization before feedback permanently ignoring a later review', async () => {
+  it('waits for buyer feedback or the post-sale feedback window before finalizing', async () => {
     const id = await registerProduct(1000);
     await prepareDelivery(id, 20);
     await sellProduct(id);
     await reputation.recordInspection(id, 10000, 10000, { from: inspector });
-    await reputation.finalizeScore(id, farmer, { from: inspector });
-    const scoreBeforeFeedback = await reputation.getReputation(farmer);
-    await reputation.submitFeedback(id, 9000, 1000, { from: buyer });
     await expectRevert(reputation.finalizeScore(id, farmer, { from: inspector }));
-    const scoreAfterFeedback = await reputation.getReputation(farmer);
-    assert.equal(scoreBeforeFeedback.scoreBps.toString(), '10000');
-    assert.equal(scoreAfterFeedback.scoreBps.toString(), '10000');
+    await reputation.submitFeedback(id, 9000, 1000, { from: buyer });
+    const finalized = await reputation.finalizeScore(id, farmer, { from: inspector });
+    const score = await reputation.getReputation(farmer);
+    assert.equal(finalized.logs.find((log) => log.event === 'ReputationFinalized').args.batchScore.toString(), '7300');
+    assert.equal(score.scoreBps.toString(), '7300');
+  });
+
+  it('allows finalization after 14 days without feedback and rejects late feedback', async () => {
+    const id = await registerProduct(1000);
+    await prepareDelivery(id, 20);
+    await sellProduct(id);
+    await reputation.recordInspection(id, 10000, 10000, { from: inspector });
+    const soldAt = Number(await tracking.actedAtOf(id, 5));
+    await rpc('evm_increaseTime', [14 * 86400 + 1]);
+    await rpc('evm_mine');
+    await reputation.finalizeScore(id, farmer, { from: inspector });
+    const finalizedAt = Number((await web3.eth.getBlock('latest')).timestamp);
+    assert(finalizedAt > soldAt + 14 * 86400);
+    await expectRevert(reputation.submitFeedback(id, 9000, 1000, { from: buyer }));
   });
 
   it('scores worse feedback lower while preserving raw complaint values', async () => {
@@ -472,10 +485,14 @@ contract('TABASC contracts', (accounts) => {
     await reputation.recordInspection(id, 8000, 6000, { from: inspector });
     await expectRevert(reputation.finalizeScore(id, outsider, { from: inspector }));
     await expectRevert(reputation.finalizeScore(id, farmer, { from: outsider }));
+    await expectRevert(reputation.finalizeScore(id, farmer, { from: inspector }));
+    await prepareDelivery(id, 20);
+    await sellProduct(id);
+    await reputation.submitFeedback(id, 0, 9000, { from: buyer });
     await reputation.finalizeScore(id, farmer, { from: inspector });
     await expectRevert(reputation.finalizeScore(id, farmer, { from: inspector }));
     assert.equal((await reputation.getHistory(farmer)).length, 1);
-    assert.equal(await reputation.getTrustLevel(farmer), 'Good');
+    assert.equal(await reputation.getTrustLevel(farmer), 'Excellent');
     assert.equal(await reputation.getTrustLevel(outsider), 'Unrated');
   });
 
@@ -484,6 +501,7 @@ contract('TABASC contracts', (accounts) => {
     await prepareDelivery(id, 20);
     await sellProduct(id);
     await reputation.recordInspection(id, 8000, 6000, { from: inspector });
+    await reputation.submitFeedback(id, 0, 9000, { from: buyer });
     for (const stakeholder of [farmer, distributor, retailer]) {
       assert.equal(await reputation.isParticipant(id, stakeholder), true);
       await reputation.finalizeScore(id, stakeholder, { from: inspector });
@@ -494,19 +512,25 @@ contract('TABASC contracts', (accounts) => {
   it('accumulates batches with the configured EMA instead of overwriting', async () => {
     const first = await registerProduct();
     await reputation.recordInspection(first, 10000, 10000, { from: inspector });
+    await prepareDelivery(first, 20);
+    await sellProduct(first);
+    await reputation.submitFeedback(first, 0, 10000, { from: buyer });
     await reputation.finalizeScore(first, farmer, { from: inspector });
     const firstScore = await reputation.getReputation(farmer);
     assert.equal(firstScore.scoreBps.toString(), '10000');
 
     const second = await registerProduct();
     await reputation.recordInspection(second, 4000, 4000, { from: inspector });
+    await prepareDelivery(second, 20);
+    await sellProduct(second);
+    await reputation.submitFeedback(second, 10000, 0, { from: buyer });
     await reputation.finalizeScore(second, farmer, { from: inspector });
     const secondScore = await reputation.getReputation(farmer);
-    assert.equal(secondScore.scoreBps.toString(), '8200');
+    assert.equal(secondScore.scoreBps.toString(), '8290');
     assert.equal(secondScore.batches.toString(), '2');
     const history = await reputation.getHistory(farmer);
     assert.equal(history.length, 2);
-    assert.equal(history[1].scoreBps.toString(), '8200');
+    assert.equal(history[1].scoreBps.toString(), '8290');
   });
 
   it('computes delivery scores at 0.5x, 1.5x and 2.5x the delivery window', async () => {
