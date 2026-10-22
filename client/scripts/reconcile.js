@@ -1,12 +1,15 @@
 const mongoose = require('mongoose');
 const Batch = require('../models/Batch');
 const ConsumerReview = require('../models/ConsumerReview');
+const ArchivedProduct = require('../models/ArchivedProduct');
 const PendingSync = require('../models/PendingSync');
 const Product = require('../models/Product');
 const ReconcileRun = require('../models/ReconcileRun');
 const TrackingEvent = require('../models/TrackingEvent');
 const config = require('../config/env');
 const connectDB = require('../config/db');
+const { archiveDisplacedProduct, assertProductRegistrationTarget } = require('../services/productRegistrationSync');
+const { web3, ProductContract } = require('../blockchain/web3');
 
 const saveTrackingEvent = async (pending, product) => {
   const event = pending.payload.event;
@@ -99,6 +102,20 @@ const reconcilePending = async (pending) => {
   } else if (pending.operation === 'product_registered') {
     if (!payload.product) {
       throw new Error(`Pending transaction ${pending.txHash} has no product payload`);
+    }
+    const existingProduct = await Product.findOne({ blockchainId: pending.blockchainId });
+    if (existingProduct &&
+        (existingProduct.batchId !== payload.product.batchId ||
+         existingProduct.transactionHash !== pending.txHash)) {
+      await archiveDisplacedProduct({
+        existingProduct: existingProduct.toObject(),
+        pending,
+        chainId: await web3.eth.getChainId(),
+        contractAddress: ProductContract.options.address,
+        models: { ArchivedProduct, Batch, ConsumerReview, Product, TrackingEvent }
+      });
+    } else {
+      assertProductRegistrationTarget(existingProduct, pending);
     }
     product = await Product.findOneAndUpdate(
       { blockchainId: pending.blockchainId },

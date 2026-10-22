@@ -8,6 +8,7 @@ const { protect } = require('./auth');
 const config = require('../config/env');
 const {
   ProductContract,
+  RoleRegistryContract,
   TrackingContract,
   web3,
   getTransactionCost
@@ -15,6 +16,7 @@ const {
 const { sendFromWallet } = require('../blockchain/wallets');
 const { AppError } = require('../middleware/errors');
 const { validateRequest } = require('../middleware/requestValidation');
+const { assertChainRole, assertFarmerRole } = require('../services/roleAuthorization');
 const {
   STATUS_LABELS,
   STATUS_MAP,
@@ -221,6 +223,18 @@ router.post('/register', protect, validateRequest({
     if (!web3.utils.isAddress(req.user.walletAddress)) {
       throw new AppError(409, 'INVALID_WALLET', 'Farmer wallet address is invalid');
     }
+    await assertFarmerRole(RoleRegistryContract, req.user.walletAddress);
+    const nextBlockchainId = BigInt(await ProductContract.methods.productCount().call()) + 1n;
+    if (nextBlockchainId > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new AppError(409, 'PRODUCT_ID_LIMIT', 'The next blockchain product ID exceeds the supported range');
+    }
+    if (await Product.exists({ blockchainId: Number(nextBlockchainId) })) {
+      throw new AppError(
+        409,
+        'CHAIN_ID_COLLISION',
+        'The next blockchain product ID is already used by an older MongoDB record. Ask an administrator to reconcile the database with the active chain before registering another product.'
+      );
+    }
     if (await Product.exists({ batchId })) {
       throw new AppError(409, 'DUPLICATE_BATCH', 'Batch ID already exists');
     }
@@ -256,8 +270,7 @@ router.post('/register', protect, validateRequest({
     const encryptedWallet = await loadEncryptedWallet(req.user._id);
     receipt = await sendFromWallet(encryptedWallet, {
       to: ProductContract.options.address,
-      data: method.encodeABI(),
-      gas: 800000
+      data: method.encodeABI()
     });
     const { blockchainId, registeredAt } = await getProductRegistration(receipt, batchId);
     let gas = null;
@@ -428,6 +441,8 @@ router.post('/:id/handover', protect, validateRequest({
     if (req.user.role !== (expectedRole === 'distributor' ? 'farmer' : 'distributor')) {
       throw new AppError(403, 'FORBIDDEN', 'Your role cannot hand over this product at its current status');
     }
+    const senderRole = expectedRole === 'distributor' ? 'farmer' : 'distributor';
+    await assertChainRole(RoleRegistryContract, senderRole, req.user.walletAddress);
 
     const recipient = await User.findOne({
       email: req.body.email.trim().toLowerCase(),
@@ -437,6 +452,7 @@ router.post('/:id/handover', protect, validateRequest({
     if (!recipient || !web3.utils.isAddress(recipient.walletAddress)) {
       throw new AppError(404, 'RECIPIENT_NOT_FOUND', `An active ${expectedRole} with that email was not found`);
     }
+    await assertChainRole(RoleRegistryContract, expectedRole, recipient.walletAddress);
 
     const method = TrackingContract.methods.handover(
       product.blockchainId,
@@ -445,8 +461,7 @@ router.post('/:id/handover', protect, validateRequest({
     const encryptedWallet = await loadEncryptedWallet(req.user._id);
     const receipt = await sendFromWallet(encryptedWallet, {
       to: TrackingContract.options.address,
-      data: method.encodeABI(),
-      gas: 300000
+      data: method.encodeABI()
     });
     try {
       await updateProduct(product._id, {

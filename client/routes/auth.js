@@ -4,6 +4,12 @@ const User = require('../models/User');
 const config = require('../config/env');
 const { createWallet } = require('../blockchain/wallets');
 const { validateRequest } = require('../middleware/requestValidation');
+const {
+  AGREEMENT_VERSION,
+  AGREEMENT_TERMS,
+  AGREEMENT_HASH,
+  isAgreementAcceptanceValid
+} = require('../policies/stakeholderAgreement');
 
 const router = express.Router();
 const requestedRoles = ['farmer', 'distributor', 'retailer', 'inspector'];
@@ -59,6 +65,8 @@ const registrationSchema = validateRequest({
     name: { required: true, type: 'string', minLength: 1 },
     email: { required: true, type: 'string', pattern: emailPattern },
     password: { required: true, type: 'string', minLength: 8 },
+    agreementAccepted: { required: true, type: 'boolean' },
+    agreementVersion: { required: true, type: 'string', minLength: 1 },
     requestedRole: { type: 'string', enum: requestedRoles },
     phone: { type: 'string' },
     location: { type: 'string' }
@@ -70,6 +78,13 @@ router.post('/register', registrationSchema, async (req, res, next) => {
   const email = req.body.email.trim().toLowerCase();
   const { password, phone, location } = req.body;
   const requestedRole = req.body.requestedRole || null;
+
+  if (!isAgreementAcceptanceValid(req.body.agreementAccepted, req.body.agreementVersion)) {
+    return res.status(400).json({
+      message: 'Read and accept the current participation agreement to register',
+      code: 'AGREEMENT_REQUIRED'
+    });
+  }
 
   if (!name) {
     return res.status(400).json({
@@ -98,6 +113,11 @@ router.post('/register', registrationSchema, async (req, res, next) => {
       password,
       role: 'consumer',
       requestedRole,
+      approvalStatus: 'pending',
+      isActive: false,
+      agreementVersion: AGREEMENT_VERSION,
+      agreementHash: AGREEMENT_HASH,
+      agreementAcceptedAt: new Date(),
       walletAddress: wallet.address,
       walletKeystore: JSON.stringify(wallet.keystore),
       phone,
@@ -110,10 +130,12 @@ router.post('/register', registrationSchema, async (req, res, next) => {
       email: user.email,
       role: user.role,
       requestedRole: user.requestedRole,
+      approvalStatus: user.approvalStatus,
+      agreementVersion: user.agreementVersion,
+      agreementAcceptedAt: user.agreementAcceptedAt,
       walletAddress: user.walletAddress,
-      pendingApproval: Boolean(user.requestedRole),
-      fundingTxHash: wallet.fundingReceipt.transactionHash,
-      token: generateToken(user._id)
+      pendingApproval: true,
+      fundingTxHash: wallet.fundingReceipt.transactionHash
     });
   } catch (error) {
     if (error.code === 11000) {
@@ -126,6 +148,11 @@ router.post('/register', registrationSchema, async (req, res, next) => {
   }
 });
 
+router.get('/agreement', (req, res) => res.json({
+  version: AGREEMENT_VERSION,
+  terms: AGREEMENT_TERMS
+}));
+
 router.post('/login', validateRequest({
   body: {
     email: { required: true, type: 'string', pattern: emailPattern },
@@ -135,10 +162,22 @@ router.post('/login', validateRequest({
   try {
     const email = req.body.email.trim().toLowerCase();
     const user = await User.findOne({ email });
-    if (!user || !user.isActive || !await user.matchPassword(req.body.password)) {
+    if (!user || !await user.matchPassword(req.body.password)) {
       return res.status(401).json({
         message: 'Invalid email or password',
         code: 'INVALID_CREDENTIALS'
+      });
+    }
+    if (user.approvalStatus === 'pending') {
+      return res.status(403).json({
+        message: 'Your account is awaiting administrator approval',
+        code: 'ACCOUNT_PENDING'
+      });
+    }
+    if (!user.isActive) {
+      return res.status(403).json({
+        message: 'Your account is inactive. Contact an administrator for assistance.',
+        code: 'ACCOUNT_INACTIVE'
       });
     }
 
@@ -148,6 +187,7 @@ router.post('/login', validateRequest({
       email: user.email,
       role: user.role,
       requestedRole: user.requestedRole,
+      approvalStatus: user.approvalStatus || 'approved',
       walletAddress: user.walletAddress,
       token: generateToken(user._id)
     });

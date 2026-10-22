@@ -5,6 +5,9 @@ import { API_URL } from '../../config/api';
 function AdminDashboard() {
   const [overview, setOverview] = useState(null);
   const [users, setUsers] = useState([]);
+  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [userPage, setUserPage] = useState(1);
+  const [userTotal, setUserTotal] = useState(0);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [workingUser, setWorkingUser] = useState('');
@@ -15,17 +18,19 @@ function AdminDashboard() {
       const [overviewResponse, usersResponse] = await Promise.all([
         axios.get(`${API_URL}/admin/overview`),
         axios.get(`${API_URL}/admin/users`, {
-          params: { status: 'all', page: 1, limit: 100 }
+          params: { status: 'all', page: userPage, limit: 100 }
         })
       ]);
       setOverview(overviewResponse.data);
       setUsers(usersResponse.data.users);
+      setPendingApprovalCount(usersResponse.data.pendingApprovalCount);
+      setUserTotal(usersResponse.data.total);
     } catch (requestError) {
       setError(requestError.response?.data?.message || 'Unable to load administrator data');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [userPage]);
 
   useEffect(() => {
     refresh();
@@ -64,6 +69,7 @@ function AdminDashboard() {
   if (loading) return <p>Loading administrator overview...</p>;
 
   const pendingUsers = users.filter((user) => user.requestedRole);
+  const totalUserPages = Math.max(1, Math.ceil(userTotal / 100));
   return (
     <div className="role-dashboard">
       <h2>Administrator Dashboard</h2>
@@ -71,7 +77,7 @@ function AdminDashboard() {
         <div>
           <p className="hero-kicker">Network administration</p>
           <h2>Manage access and monitor system health.</h2>
-          <p>Approve supply-chain role requests and review synchronization status.</p>
+          <p>Approve accounts and supply-chain roles, manage access, and review synchronization status.</p>
         </div>
       </div>
       {error && <p className="error-message" role="alert">{error}</p>}
@@ -85,6 +91,10 @@ function AdminDashboard() {
             <div className="kpi-card">
               <strong>{pendingUsers.length}</strong>
               <span>Pending role requests</span>
+            </div>
+            <div className="kpi-card">
+              <strong>{pendingApprovalCount}</strong>
+              <span>Pending account approvals</span>
             </div>
             <div className="kpi-card">
               <strong>{overview.pendingSyncs}</strong>
@@ -117,6 +127,7 @@ function AdminDashboard() {
           <h3>Role requests and accounts</h3>
           <button type="button" onClick={refresh}>Refresh</button>
         </div>
+        <p>Page {userPage} of {totalUserPages} ({userTotal} accounts)</p>
         {users.length === 0 ? (
           <p className="empty-state">No accounts were returned.</p>
         ) : (
@@ -125,7 +136,7 @@ function AdminDashboard() {
               <thead>
                 <tr>
                   <th>Name</th><th>Email</th><th>Role</th><th>Request</th>
-                  <th>Status</th><th>Actions</th>
+                  <th>Account approval</th><th>Access</th><th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -135,27 +146,37 @@ function AdminDashboard() {
                     <td>{user.email}</td>
                     <td>{user.role}</td>
                     <td>{user.requestedRole || '—'}</td>
+                    <td>{user.approvalStatus === 'pending' ? 'Pending approval' : 'Approved'}</td>
                     <td>{user.isActive ? 'Active' : 'Inactive'}</td>
                     <td>
+                      {user.role !== 'admin' && user.approvalStatus === 'pending' && (
+                        <button
+                          type="button"
+                          disabled={workingUser === user._id}
+                          onClick={() => updateActive(user)}
+                        >
+                          Approve &amp; activate
+                        </button>
+                      )}
                       {user.requestedRole && (
                         <>
                           <button
                             type="button"
-                            disabled={workingUser === user._id}
+                            disabled={workingUser === user._id || user.approvalStatus === 'pending'}
                             onClick={() => updateRole(user, 'approve')}
                           >
                             Approve
                           </button>
                           <button
                             type="button"
-                            disabled={workingUser === user._id}
+                            disabled={workingUser === user._id || user.approvalStatus === 'pending'}
                             onClick={() => updateRole(user, 'reject')}
                           >
                             Reject
                           </button>
                         </>
                       )}
-                      {user.role !== 'admin' && (
+                      {user.role !== 'admin' && user.approvalStatus !== 'pending' && (
                         <button
                           type="button"
                           disabled={workingUser === user._id}
@@ -171,6 +192,22 @@ function AdminDashboard() {
             </table>
           </div>
         )}
+        <div className="section-heading">
+          <button
+            type="button"
+            disabled={userPage <= 1}
+            onClick={() => setUserPage((page) => Math.max(1, page - 1))}
+          >
+            Previous accounts
+          </button>
+          <button
+            type="button"
+            disabled={userPage >= totalUserPages}
+            onClick={() => setUserPage((page) => Math.min(totalUserPages, page + 1))}
+          >
+            Next accounts
+          </button>
+        </div>
       </section>
     </div>
   );

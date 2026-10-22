@@ -24,7 +24,16 @@ const errorHandler = (error, req, res, next) => {
     : error.message;
 
   if (status >= 500) {
-    console.error(`Request failed with ${code} on ${req.method} ${req.path}`);
+    const cause = error.cause;
+    const diagnostic = {
+      code,
+      name: error.name || 'Error',
+      causeCode: cause?.code,
+      causeName: cause?.name
+    };
+    console.error(
+      `Request failed on ${req.method} ${req.path}: ${JSON.stringify(diagnostic)}`
+    );
   }
 
   return res.status(status).json({ message, code });

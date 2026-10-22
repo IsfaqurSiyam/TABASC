@@ -36,7 +36,7 @@ const run = async () => {
 
       await RoleRegistryContract.methods
         .grantRole(role, user.walletAddress)
-        .send({ from: adminWallet, gas: 200000 });
+        .send({ from: adminWallet });
       granted += 1;
     }
     console.log(`Role sync completed; ${granted} grants added`);

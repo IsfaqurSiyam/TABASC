@@ -62,6 +62,31 @@ farmer, distributor, retailer, or inspector role. The administrator dashboard
 reviews these requests and grants the matching on-chain role before activating
 the role in MongoDB. The web dashboards expose the corresponding custody,
 shipment, buyer, recall, and product-verification workflows.
+Registration displays the current version of the TABASC Participation
+Agreement and requires explicit acceptance. The accepted version, agreement
+hash, and server-side acceptance time are stored with the account. This
+agreement does not create a court process: administrators can deactivate
+accounts or revoke approved on-chain roles, while only competent authorities
+and courts can decide legal proceedings.
+New registrations are inactive and remain pending until an administrator uses
+“Approve & activate” in the account list. Pending accounts cannot log in and
+receive no login token at registration. Administrators can later deactivate or
+reactivate approved accounts; pending role requests can be approved only after
+the account itself has been approved.
+Blockchain transactions estimate gas from the requested operation, verify the
+wallet can cover the estimated fee, and check required on-chain roles before
+broadcast. Insufficient funds and stale role/state failures return actionable
+conflict responses instead of relying on a fixed gas cap.
+When a newly deployed or reset development chain reuses a product ID already
+stored in MongoDB, reconciliation archives the displaced product and its
+related batch, tracking, and review records in the `ArchivedProduct` collection
+before syncing the on-chain record. Product registration checks the next chain
+ID against MongoDB before submitting, so unresolved legacy ID collisions are
+reported before another transaction is sent.
+To archive all MongoDB product records whose IDs are beyond the active chain's
+product count, run `npm run archive:stale-products --prefix client`. This
+preserves their data and related records in `ArchivedProduct` before freeing
+those IDs for future registrations.
 
 Back up MongoDB with `mongodump` before running `npm run migrate:wallets
 --prefix client`; that script replaces legacy wallet addresses while retaining

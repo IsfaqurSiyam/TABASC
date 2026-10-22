@@ -4,6 +4,7 @@ const User = require('../models/User');
 const TrackingEvent = require('../models/TrackingEvent');
 const { protect } = require('./auth');
 const {
+  RoleRegistryContract,
   TrackingContract,
   web3,
   getTransactionCost
@@ -11,6 +12,7 @@ const {
 const { sendFromWallet } = require('../blockchain/wallets');
 const { AppError } = require('../middleware/errors');
 const { validateRequest } = require('../middleware/requestValidation');
+const { assertChainRole } = require('../services/roleAuthorization');
 const {
   STATUS_LABELS,
   STATUS_MAP,
@@ -104,6 +106,7 @@ router.post('/update', protect, validateRequest({
     if (req.user.role !== requiredRole) {
       throw new AppError(403, 'FORBIDDEN', `Only the current ${requiredRole} can set ${status}`);
     }
+    await assertChainRole(RoleRegistryContract, requiredRole, req.user.walletAddress);
     if ((status === 'OnShelf' || status === 'Sold') && isExpired(product.expiryDate)) {
       throw new AppError(409, 'PRODUCT_EXPIRED', 'Expired products cannot be placed on shelf or sold');
     }
@@ -128,8 +131,7 @@ router.post('/update', protect, validateRequest({
     const encryptedWallet = await loadEncryptedWallet(req.user._id);
     receipt = await sendFromWallet(encryptedWallet, {
       to: TrackingContract.options.address,
-      data: method.encodeABI(),
-      gas: 400000
+      data: method.encodeABI()
     });
 
     let event;
@@ -266,6 +268,7 @@ router.post('/:id/buyer', protect, validateRequest({
     if (buyer.walletAddress.toLowerCase() === req.user.walletAddress.toLowerCase()) {
       throw new AppError(400, 'INVALID_BUYER', 'Retailer and buyer wallets must be different');
     }
+    await assertChainRole(RoleRegistryContract, 'retailer', req.user.walletAddress);
     const method = TrackingContract.methods.recordBuyer(
       product.blockchainId,
       buyer.walletAddress
@@ -273,8 +276,7 @@ router.post('/:id/buyer', protect, validateRequest({
     const encryptedWallet = await loadEncryptedWallet(req.user._id);
     const receipt = await sendFromWallet(encryptedWallet, {
       to: TrackingContract.options.address,
-      data: method.encodeABI(),
-      gas: 250000
+      data: method.encodeABI()
     });
     try {
       await updateProduct(product._id, {
@@ -330,6 +332,7 @@ router.post('/:id/recall', protect, validateRequest({
     if (req.user.role !== 'inspector') {
       throw new AppError(403, 'FORBIDDEN', 'Only inspectors can recall products');
     }
+    await assertChainRole(RoleRegistryContract, 'inspector', req.user.walletAddress);
     const reason = req.body.reason.trim();
     if (!reason) throw new AppError(400, 'EMPTY_RECALL_REASON', 'Recall reason is required');
     const product = await resolveProduct(req.params.id);
@@ -343,8 +346,7 @@ router.post('/:id/recall', protect, validateRequest({
     const encryptedWallet = await loadEncryptedWallet(req.user._id);
     const receipt = await sendFromWallet(encryptedWallet, {
       to: TrackingContract.options.address,
-      data: method.encodeABI(),
-      gas: 250000
+      data: method.encodeABI()
     });
     try {
       await updateProduct(product._id, {

@@ -19,7 +19,7 @@ const run = async () => {
     if (!isAdmin) {
       await RoleRegistryContract.methods
         .grantRole(adminRole, adminWallet)
-        .send({ from: adminWallet, gas: 200000 });
+        .send({ from: adminWallet });
     }
 
     const existing = await User.findOne({ email: config.adminEmail });

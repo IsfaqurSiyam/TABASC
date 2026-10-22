@@ -9,6 +9,7 @@ const { protect } = require('./auth');
 const config = require('../config/env');
 const {
   RoleRegistryContract,
+  ProductContract,
   ReputationContract,
   TrackingContract,
   getAccounts,
@@ -98,15 +99,16 @@ router.get('/users', async (req, res, next) => {
 
     const page = parsePage(req.query.page, 1, Number.MAX_SAFE_INTEGER);
     const limit = parsePage(req.query.limit, 25, 100);
-    const [users, total] = await Promise.all([
+    const [users, total, pendingApprovalCount] = await Promise.all([
       User.find(filter)
-        .select('name email role requestedRole walletAddress legacyWallet phone location isActive createdAt')
+        .select('name email role requestedRole approvalStatus walletAddress legacyWallet phone location isActive createdAt')
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit),
-      User.countDocuments(filter)
+      User.countDocuments(filter),
+      User.countDocuments({ approvalStatus: 'pending' })
     ]);
-    return res.json({ users, page, limit, total });
+    return res.json({ users, page, limit, total, pendingApprovalCount });
   } catch (error) {
     return next(error);
   }
@@ -140,6 +142,10 @@ router.patch('/users/:id/role', validateRequest({
       return res.json({ message: 'Role request rejected', userId: target._id, role: target.role });
     }
 
+    if (action === 'approve' && target.approvalStatus === 'pending') {
+      throw new AppError(409, 'ACCOUNT_APPROVAL_REQUIRED', 'Approve and activate this account before granting a supply-chain role');
+    }
+
     const role = req.body.role || (action === 'approve' ? target.requestedRole : target.role);
     if (!role || !assignableRoles.includes(role)) {
       throw new AppError(400, 'INVALID_ROLE', 'A valid supply-chain role is required');
@@ -159,12 +165,12 @@ router.patch('/users/:id/role', validateRequest({
     if (action === 'approve' && !alreadyGranted) {
       const receipt = await RoleRegistryContract.methods
         .grantRole(roleId, target.walletAddress)
-        .send({ from: req.adminWallet, gas: 200000 });
+        .send({ from: req.adminWallet });
       txHash = receipt.transactionHash;
     } else if (action === 'revoke' && alreadyGranted) {
       const receipt = await RoleRegistryContract.methods
         .revokeRole(roleId, target.walletAddress)
-        .send({ from: req.adminWallet, gas: 200000 });
+        .send({ from: req.adminWallet });
       txHash = receipt.transactionHash;
     }
 
@@ -210,6 +216,9 @@ router.patch('/users/:id/active', validateRequest({
       throw new AppError(400, 'ADMIN_DEACTIVATION_BLOCKED', 'An admin account cannot be deactivated here');
     }
     target.isActive = req.body.isActive;
+    if (req.body.isActive) {
+      target.approvalStatus = 'approved';
+    }
     await target.save();
     await recordAudit(
       req.user._id,
@@ -217,7 +226,11 @@ router.patch('/users/:id/active', validateRequest({
       target._id,
       { isActive: target.isActive }
     );
-    return res.json({ userId: target._id, isActive: target.isActive });
+    return res.json({
+      userId: target._id,
+      isActive: target.isActive,
+      approvalStatus: target.approvalStatus || 'approved'
+    });
   } catch (error) {
     return next(error);
   }
@@ -296,19 +309,19 @@ router.patch('/reputation-config', async (req, res, next) => {
     if (weightValues) {
       const receipt = await ReputationContract.methods
         .setWeights(...weightValues)
-        .send({ from: req.adminWallet, gas: 200000 });
+        .send({ from: req.adminWallet });
       transactionHashes.push(receipt.transactionHash);
     }
     if (alpha !== undefined) {
       const receipt = await ReputationContract.methods
         .setAlpha(alpha)
-        .send({ from: req.adminWallet, gas: 100000 });
+        .send({ from: req.adminWallet });
       transactionHashes.push(receipt.transactionHash);
     }
     if (thresholdValues) {
       const receipt = await ReputationContract.methods
         .setThresholds(...thresholdValues)
-        .send({ from: req.adminWallet, gas: 100000 });
+        .send({ from: req.adminWallet });
       transactionHashes.push(receipt.transactionHash);
     }
 
@@ -344,22 +357,30 @@ router.get('/overview', async (req, res, next) => {
       ReconcileRun.findOne().sort({ completedAt: -1 })
     ]);
 
-    const recalledProducts = await Promise.all(products.map(async (product) => ({
-      product,
-      recalled: await TrackingContract.methods.isRecalled(product.blockchainId).call()
-    })));
-    const reputationRows = await Promise.all(stakeholders.map(async (stakeholder) => {
-      const reputation = await ReputationContract.methods
-        .getReputation(stakeholder.walletAddress)
-        .call();
-      const reputationExists = Array.isArray(reputation) ? reputation[2] : reputation.exists;
-      const exists = reputationExists === true || reputationExists === 'true';
-      const scoreBps = Array.isArray(reputation) ? reputation[0] : reputation.scoreBps;
+    const recalledProducts = (await Promise.all(products.map(async (product) => {
+      const exists = await ProductContract.methods.exists(product.blockchainId).call();
+      if (!isTrue(exists)) {
+        return null;
+      }
       return {
-        role: stakeholder.role,
-        scoreBps: exists ? Number(scoreBps) : null
+        product,
+        recalled: await TrackingContract.methods.isRecalled(product.blockchainId).call()
       };
-    }));
+    }))).filter(Boolean);
+    const reputationRows = await Promise.all(stakeholders
+      .filter((stakeholder) => web3.utils.isAddress(stakeholder.walletAddress))
+      .map(async (stakeholder) => {
+        const reputation = await ReputationContract.methods
+          .getReputation(stakeholder.walletAddress)
+          .call();
+        const reputationExists = Array.isArray(reputation) ? reputation[2] : reputation.exists;
+        const exists = reputationExists === true || reputationExists === 'true';
+        const scoreBps = Array.isArray(reputation) ? reputation[0] : reputation.scoreBps;
+        return {
+          role: stakeholder.role,
+          scoreBps: exists ? Number(scoreBps) : null
+        };
+      }));
     const averageReputationByRole = reputationRoles.map((role) => {
       const scores = reputationRows
         .filter((entry) => entry.role === role && entry.scoreBps !== null)

@@ -40,6 +40,20 @@ const UserSchema = new mongoose.Schema({
     enum: ['farmer', 'distributor', 'retailer', 'inspector'],
     default: null
   },
+  agreementVersion: {
+    type: String
+  },
+  agreementHash: {
+    type: String
+  },
+  agreementAcceptedAt: {
+    type: Date
+  },
+  approvalStatus: {
+    type: String,
+    enum: ['pending', 'approved'],
+    default: 'approved'
+  },
   phone: {
     type: String
   },

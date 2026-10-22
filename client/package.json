@@ -14,7 +14,8 @@
     "seed:admin": "node scripts/seed-admin.js",
     "migrate:wallets": "node scripts/migrate-wallets.js",
     "sync:roles": "node scripts/sync-roles.js",
-    "reconcile": "node scripts/reconcile.js"
+    "reconcile": "node scripts/reconcile.js",
+    "archive:stale-products": "node scripts/archive-stale-products.js"
   },
   "keywords": [],
   "author": "",

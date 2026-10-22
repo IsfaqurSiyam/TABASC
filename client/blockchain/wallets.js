@@ -1,7 +1,19 @@
 const config = require('../config/env');
 const { web3, getAccounts } = require('./web3');
+const { AppError } = require('../middleware/errors');
 
 const transactionQueues = new Map();
+
+const assertSufficientBalance = (balance, gas, gasPrice, value = '0') => {
+  const requiredBalance = BigInt(gas) * BigInt(gasPrice) + BigInt(value);
+  if (BigInt(balance) < requiredBalance) {
+    throw new AppError(
+      409,
+      'INSUFFICIENT_GAS_FUNDS',
+      'This wallet does not have enough funds for the estimated transaction fee. Fund it and retry.'
+    );
+  }
+};
 
 const withWalletQueue = async (address, operation) => {
   const key = address.toLowerCase();
@@ -66,17 +78,32 @@ const sendFromWallet = async (encryptedKeystore, transaction, passphrase = confi
   return withWalletQueue(account.address, async () => {
     const nonce = await web3.eth.getTransactionCount(account.address, 'pending');
     const chainId = await web3.eth.getChainId();
-    const gas = transaction.gas || await web3.eth.estimateGas({
-      from: account.address,
-      to: transaction.to,
-      data: transaction.data || '0x',
-      value: transaction.value || '0'
-    });
+    const transactionValue = transaction.value || '0';
+    let gas;
+    try {
+      gas = await web3.eth.estimateGas({
+        from: account.address,
+        to: transaction.to,
+        data: transaction.data || '0x',
+        value: transactionValue
+      });
+    } catch (error) {
+      if (error.code === 310 || error.name === 'ContractExecutionError') {
+        throw new AppError(
+          409,
+          'BLOCKCHAIN_STATE_CONFLICT',
+          'The blockchain rejected this action for the current product state or account permissions'
+        );
+      }
+      throw error;
+    }
     const gasPrice = transaction.gasPrice || await web3.eth.getGasPrice();
+    const balance = BigInt(await web3.eth.getBalance(account.address));
+    assertSufficientBalance(balance, gas, gasPrice, transactionValue);
     const signedTransaction = await web3.eth.accounts.signTransaction({
       to: transaction.to,
       data: transaction.data || '0x',
-      value: transaction.value || '0',
+      value: transactionValue,
       gas,
       gasPrice,
       nonce,
@@ -95,5 +122,6 @@ module.exports = {
   fundWallet,
   sendFromWallet,
   unlockWallet,
-  withWalletQueue
+  withWalletQueue,
+  assertSufficientBalance
 };

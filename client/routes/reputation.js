@@ -8,12 +8,14 @@ const { AppError } = require('../middleware/errors');
 const { validateRequest } = require('../middleware/requestValidation');
 const { sendFromWallet } = require('../blockchain/wallets');
 const {
+  RoleRegistryContract,
   ProductContract,
   ReputationContract,
   TrackingContract,
   web3,
   getTransactionCost
 } = require('../blockchain/web3');
+const { assertChainRole } = require('../services/roleAuthorization');
 const {
   loadEncryptedWallet,
   recordPendingSync
@@ -119,6 +121,7 @@ router.post('/score', protect, validateRequest({
     if (req.user.role !== 'inspector') {
       throw new AppError(403, 'FORBIDDEN', 'Only inspectors can submit inspections');
     }
+    await assertChainRole(RoleRegistryContract, 'inspector', req.user.walletAddress);
     if (!web3.utils.isAddress(req.body.stakeholderWallet)) {
       throw new AppError(400, 'INVALID_WALLET', 'A valid participant wallet is required');
     }
@@ -139,8 +142,7 @@ router.post('/score', protect, validateRequest({
       const encryptedWallet = await loadEncryptedWallet(req.user._id);
       const receipt = await sendFromWallet(encryptedWallet, {
         to: ReputationContract.options.address,
-        data: method.encodeABI(),
-        gas: 350000
+        data: method.encodeABI()
       });
       inspectionTxHash = receipt.transactionHash;
       try {
@@ -200,8 +202,7 @@ router.post('/score', protect, validateRequest({
     const encryptedWallet = await loadEncryptedWallet(req.user._id);
     const receipt = await sendFromWallet(encryptedWallet, {
       to: ReputationContract.options.address,
-      data: finalize.encodeABI(),
-      gas: 400000
+      data: finalize.encodeABI()
     });
     const [reputation, trustLevel] = await Promise.all([
       ReputationContract.methods.getReputation(req.body.stakeholderWallet).call(),
@@ -318,8 +319,7 @@ router.post('/reviews', protect, validateRequest({
     const encryptedWallet = await loadEncryptedWallet(req.user._id);
     const receipt = await sendFromWallet(encryptedWallet, {
       to: ReputationContract.options.address,
-      data: method.encodeABI(),
-      gas: 300000
+      data: method.encodeABI()
     });
 
     try {

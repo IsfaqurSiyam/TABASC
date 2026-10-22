@@ -15,18 +15,235 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { validateEnvironment } = require('../config/env');
 const {
+  AGREEMENT_VERSION,
+  AGREEMENT_TERMS,
+  AGREEMENT_HASH,
+  isAgreementAcceptanceValid
+} = require('../policies/stakeholderAgreement');
+const {
   canonicalJson,
   canonicalProductFields,
   hashRecord,
   isExpired,
   trackingHash
 } = require('../services/supplyChain');
+const { assertChainRole, assertFarmerRole } = require('../services/roleAuthorization');
+const { assertSufficientBalance } = require('../blockchain/wallets');
+const {
+  archiveDisplacedProduct,
+  assertProductRegistrationTarget
+} = require('../services/productRegistrationSync');
 
 test('admin seeding credentials are optional for backend startup', () => {
   const environment = { ...process.env };
   delete environment.ADMIN_EMAIL;
   delete environment.ADMIN_PASSWORD;
   assert.doesNotThrow(() => validateEnvironment(environment));
+});
+
+test('product registration requires the farmer role on the active chain', async () => {
+  const roleRegistry = {
+    methods: {
+      FARMER_ROLE: () => ({ call: async () => 'farmer-role-hash' }),
+      hasRole: (role, wallet) => ({
+        call: async () => role === 'farmer-role-hash' &&
+          wallet === '0x1111111111111111111111111111111111111111'
+      })
+    }
+  };
+  await assert.doesNotReject(() => assertFarmerRole(
+    roleRegistry,
+    '0x1111111111111111111111111111111111111111'
+  ));
+  await assert.rejects(
+    () => assertFarmerRole(roleRegistry, '0x2222222222222222222222222222222222222222'),
+    (error) => error.status === 403 && error.code === 'FARMER_ROLE_REQUIRED'
+  );
+});
+
+test('custody transfer requires the recipient role on the active chain', async () => {
+  const roleRegistry = {
+    methods: {
+      DISTRIBUTOR_ROLE: () => ({ call: async () => 'distributor-role-hash' }),
+      hasRole: (role, wallet) => ({
+        call: async () => role === 'distributor-role-hash' &&
+          wallet === '0x3333333333333333333333333333333333333333'
+      })
+    }
+  };
+  await assert.doesNotReject(
+    () => assertChainRole(
+      roleRegistry,
+      'distributor',
+      '0x3333333333333333333333333333333333333333'
+    )
+  );
+  await assert.rejects(
+    () => assertChainRole(
+      roleRegistry,
+      'distributor',
+      '0x4444444444444444444444444444444444444444'
+    ),
+    (error) => error.status === 403 && error.code === 'DISTRIBUTOR_ROLE_REQUIRED'
+  );
+});
+
+test('transaction balance checks use estimated gas rather than oversized fixed limits', () => {
+  assert.doesNotThrow(() => assertSufficientBalance(1_200_000n, 50_000n, 20n));
+  assert.throws(
+    () => assertSufficientBalance(999_999n, 50_000n, 20n),
+    (error) => error.status === 409 && error.code === 'INSUFFICIENT_GAS_FUNDS'
+  );
+  assert.throws(
+    () => assertSufficientBalance(1_200_000n, 50_000n, 20n, 200_001n),
+    (error) => error.code === 'INSUFFICIENT_GAS_FUNDS'
+  );
+});
+
+test('product reconciliation refuses to overwrite a different record using the same chain ID', () => {
+  const pending = {
+    blockchainId: 1,
+    txHash: '0xnew-transaction',
+    payload: { product: { batchId: 'NEW-BATCH' } }
+  };
+  assert.doesNotThrow(() => assertProductRegistrationTarget(null, pending));
+  assert.doesNotThrow(() => assertProductRegistrationTarget({
+    batchId: 'NEW-BATCH',
+    transactionHash: '0xnew-transaction'
+  }, pending));
+  assert.throws(() => assertProductRegistrationTarget({
+    batchId: 'OLD-BATCH',
+    transactionHash: '0xold-transaction'
+  }, pending), /refusing to overwrite it/);
+});
+
+test('displaced product archival preserves its related records before freeing the chain ID', async () => {
+  const oldProduct = {
+    _id: 'old-product',
+    blockchainId: 1,
+    batchId: 'OLD-BATCH',
+    transactionHash: '0xold-transaction'
+  };
+  const pending = {
+    blockchainId: 1,
+    txHash: '0xnew-transaction',
+    payload: { product: { batchId: 'NEW-BATCH' } }
+  };
+  const batches = [{
+    _id: 'old-batch',
+    batchId: 'OLD-BATCH',
+    products: ['old-product'],
+    totalProducts: 1
+  }];
+  const trackingEvents = [{ _id: 'old-event', product: 'old-product' }];
+  const reviews = [{ _id: 'old-review', batch: 'old-batch' }];
+  let archive;
+  let productDeleted = false;
+  const models = {
+    Batch: {
+      find: () => ({ lean: async () => batches.filter((batch) => batch.products.includes(oldProduct._id)) }),
+      deleteMany: async ({ _id }) => {
+        const removed = batches.filter((batch) => _id.$in.includes(batch._id));
+        for (const batch of removed) batches.splice(batches.indexOf(batch), 1);
+        return { deletedCount: removed.length };
+      },
+      updateOne: async () => ({ matchedCount: 1 })
+    },
+    TrackingEvent: {
+      find: () => ({ lean: async () => trackingEvents.slice() }),
+      deleteMany: async () => {
+        const deletedCount = trackingEvents.length;
+        trackingEvents.length = 0;
+        return { deletedCount };
+      }
+    },
+    ConsumerReview: {
+      find: () => ({ lean: async () => reviews.slice() }),
+      deleteMany: async () => {
+        const deletedCount = reviews.length;
+        reviews.length = 0;
+        return { deletedCount };
+      }
+    },
+    ArchivedProduct: {
+      updateOne: async (filter, update) => {
+        archive = { ...filter, ...update.$setOnInsert };
+        return { upsertedCount: 1 };
+      }
+    },
+    Product: {
+      deleteOne: async () => {
+        productDeleted = true;
+        return { deletedCount: 1 };
+      }
+    }
+  };
+
+  const archived = await archiveDisplacedProduct({
+    existingProduct: oldProduct,
+    pending,
+    chainId: 1337,
+    contractAddress: '0x1234567890123456789012345678901234567890',
+    models
+  });
+
+  assert.equal(archived, true);
+  assert.equal(archive.productSnapshot, oldProduct);
+  assert.deepEqual(archive.batchSnapshots, [{
+    _id: 'old-batch',
+    batchId: 'OLD-BATCH',
+    products: ['old-product'],
+    totalProducts: 1
+  }]);
+  assert.deepEqual(archive.trackingEventSnapshots, [{ _id: 'old-event', product: 'old-product' }]);
+  assert.deepEqual(archive.consumerReviewSnapshots, [{ _id: 'old-review', batch: 'old-batch' }]);
+  assert.equal(productDeleted, true);
+  assert.equal(batches.length, 0);
+  assert.equal(trackingEvents.length, 0);
+  assert.equal(reviews.length, 0);
+});
+
+test('stale product archival records chain-reset history without a replacement transaction', async () => {
+  let archive;
+  const models = {
+    Batch: { find: () => ({ lean: async () => [] }) },
+    TrackingEvent: {
+      find: () => ({ lean: async () => [] }),
+      deleteMany: async () => ({ deletedCount: 0 })
+    },
+    ConsumerReview: {},
+    ArchivedProduct: {
+      updateOne: async (filter, update) => {
+        archive = { ...filter, ...update.$setOnInsert };
+      }
+    },
+    Product: { deleteOne: async () => ({ deletedCount: 1 }) }
+  };
+  const archived = await archiveDisplacedProduct({
+    existingProduct: {
+      _id: 'stale-product',
+      blockchainId: 4,
+      batchId: 'OLD-BATCH',
+      transactionHash: '0xold-transaction'
+    },
+    pending: null,
+    chainId: 1337,
+    contractAddress: '0x1234567890123456789012345678901234567890',
+    reason: 'Product ID exceeds active chain product count (1)',
+    models
+  });
+
+  assert.equal(archived, true);
+  assert.equal(archive.displacedByTransactionHash, null);
+  assert.equal(archive.reason, 'Product ID exceeds active chain product count (1)');
+});
+
+test('stakeholder agreement acceptance requires the current version and explicit consent', () => {
+  assert.equal(isAgreementAcceptanceValid(true, AGREEMENT_VERSION), true);
+  assert.equal(isAgreementAcceptanceValid(false, AGREEMENT_VERSION), false);
+  assert.equal(isAgreementAcceptanceValid(true, 'outdated'), false);
+  assert.ok(AGREEMENT_TERMS.length >= 5);
+  assert.match(AGREEMENT_HASH, /^[a-f0-9]{64}$/);
 });
 
 const fixtureProduct = () => ({
