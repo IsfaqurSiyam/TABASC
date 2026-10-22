@@ -15,7 +15,8 @@ const app = express();
 app.disable('x-powered-by');
 app.use(helmet());
 app.use(cors({
-  origin: (origin, callback) => callback(null, !origin || origin === config.corsOrigin)
+  origin: (origin, callback) => callback(null, !origin || origin === config.corsOrigin),
+  exposedHeaders: ['X-Total-Count', 'X-Page', 'X-Page-Size']
 }));
 app.use(express.json({ limit: '1mb' }));
 
