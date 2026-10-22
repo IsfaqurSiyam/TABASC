@@ -30,7 +30,9 @@ function ConsumerDashboard() {
     setFeedbackEligibilityLoading(true);
     setLoading(true);
     try {
-      const res = await axios.get(`${API_URL}/products/batch/${batchId}`);
+      const res = await axios.get(
+        `${API_URL}/products/batch/${encodeURIComponent(batchId)}`
+      );
       setProduct(res.data);
 
       const [trackResult, eligibilityResult] = await Promise.allSettled([

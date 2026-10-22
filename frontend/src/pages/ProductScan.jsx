@@ -16,7 +16,9 @@ function ProductScan() {
       setLoading(true);
       setError('');
       try {
-        const res = await axios.get(`${API_URL}/products/batch/${batchId}`);
+        const res = await axios.get(
+          `${API_URL}/products/batch/${encodeURIComponent(batchId)}`
+        );
         setProduct(res.data);
 
         const trackRes = await axios.get(`${API_URL}/tracking/${res.data.blockchainId}`);

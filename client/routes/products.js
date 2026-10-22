@@ -109,7 +109,7 @@ const parseDate = (value, field) => {
 };
 
 const getScanUrl = (batchId) =>
-  `${config.corsOrigin}/scan/${encodeURIComponent(batchId)}`;
+  `${config.publicAppUrl}/scan/${encodeURIComponent(batchId)}`;
 
 const parsePage = (value, fallback, max) => {
   const parsed = Number.parseInt(value, 10);

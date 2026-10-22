@@ -53,6 +53,15 @@ test('admin seeding credentials are optional for backend startup', () => {
   assert.doesNotThrow(() => validateEnvironment(environment));
 });
 
+test('public scan URL config is independent from CORS with a backwards-compatible fallback', () => {
+  const environment = { ...process.env };
+  environment.PUBLIC_APP_URL = 'https://scan.example.test';
+  assert.equal(validateEnvironment(environment).publicAppUrl, environment.PUBLIC_APP_URL);
+
+  delete environment.PUBLIC_APP_URL;
+  assert.equal(validateEnvironment(environment).publicAppUrl, environment.CORS_ORIGIN);
+});
+
 test('product registration requires the farmer role on the active chain', async () => {
   const roleRegistry = {
     methods: {

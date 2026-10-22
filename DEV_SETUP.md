@@ -27,6 +27,8 @@ Copy `.env.example` to `client/.env` and replace the placeholder secrets and
 settings. Backend startup requires a JWT secret and wallet passphrase of at
 least 32 characters, a valid local MongoDB URL, local Ganache URL, a positive
 wallet funding amount, token expiry, and the configured frontend origin.
+Set optional `PUBLIC_APP_URL` to the public frontend origin used when generating
+product QR links; it defaults to `CORS_ORIGIN` for existing installations.
 `ADMIN_EMAIL` and `ADMIN_PASSWORD` are only required when explicitly running
 the administrator-seeding script.
 Before startup, confirm every key in `.env.example` is present in
