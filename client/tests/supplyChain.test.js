@@ -31,6 +31,10 @@ const {
 const { assertChainRole, assertFarmerRole } = require('../services/roleAuthorization');
 const { assertSufficientBalance } = require('../blockchain/wallets');
 const {
+  getFinalizedBatchScore,
+  saveBatchReputationScore
+} = require('../services/reputationScores');
+const {
   archiveDisplacedProduct,
   assertProductRegistrationTarget
 } = require('../services/productRegistrationSync');
@@ -289,6 +293,67 @@ test('delivery windows entered in days convert to bounded seconds before hashing
   const fields = canonicalProductFields({
     ...fixtureProduct(),
     deliveryWindow: deliveryWindowDaysToSeconds(3)
+  });
+
+  test('batch reputation records are keyed by batch and stakeholder', async () => {
+    const writes = [];
+    const model = {
+      updateOne: async (...args) => {
+        writes.push(args);
+        return { acknowledged: true };
+      }
+    };
+    const base = {
+      batchId: 'BATCH-01',
+      stakeholderWallet: '0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      scoreBps: 8100,
+      finalScore: 810,
+      trustLevel: 'Excellent',
+      totalBatches: 2,
+      transactionHash: '0xfirst',
+      finalizedAt: new Date('2026-01-01T00:00:00.000Z')
+    };
+
+    await saveBatchReputationScore(model, base);
+    await saveBatchReputationScore(model, {
+      ...base,
+      stakeholderWallet: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      scoreBps: 6200,
+      finalScore: 620,
+      transactionHash: '0xsecond'
+    });
+
+    assert.equal(writes.length, 2);
+    assert.deepEqual(writes.map(([filter]) => filter), [
+      { batchId: 'BATCH-01', stakeholderWallet: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
+      { batchId: 'BATCH-01', stakeholderWallet: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' }
+    ]);
+    assert.equal(writes[0][2].upsert, true);
+    assert.equal(writes[1][1].$set.scoreBps, 6200);
+  });
+
+  test('finalized batch score is decoded from the matching chain event', () => {
+    const { ReputationContract, web3 } = require('../blockchain/web3');
+    const eventAbi = ReputationContract.options.jsonInterface.find(
+      (item) => item.type === 'event' && item.name === 'ReputationFinalized'
+    );
+    const productId = '7';
+    const stakeholder = '0x1111111111111111111111111111111111111111';
+    const receipt = {
+      logs: [{
+        topics: [
+          web3.eth.abi.encodeEventSignature(eventAbi),
+          web3.eth.abi.encodeParameter('uint256', productId),
+          web3.eth.abi.encodeParameter('address', stakeholder)
+        ],
+        data: web3.eth.abi.encodeParameters(
+          ['uint256', 'uint256', 'uint256', 'uint256'],
+          ['9100', '8200', '3', '1792663713']
+        )
+      }]
+    };
+    assert.equal(getFinalizedBatchScore(receipt, 7, stakeholder), 9100);
+    assert.throws(() => getFinalizedBatchScore(receipt, 8, stakeholder), /does not match/);
   });
   assert.equal(fields.deliveryWindow, 259200);
 });

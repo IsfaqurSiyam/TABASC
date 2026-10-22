@@ -2,6 +2,7 @@ const express = require('express');
 const Batch = require('../models/Batch');
 const ConsumerReview = require('../models/ConsumerReview');
 const Product = require('../models/Product');
+const BatchReputationScore = require('../models/BatchReputationScore');
 const User = require('../models/User');
 const { protect } = require('./auth');
 const { AppError } = require('../middleware/errors');
@@ -16,6 +17,10 @@ const {
   getTransactionCost
 } = require('../blockchain/web3');
 const { assertChainRole } = require('../services/roleAuthorization');
+const {
+  getFinalizedBatchScore,
+  saveBatchReputationScore
+} = require('../services/reputationScores');
 const {
   loadEncryptedWallet,
   recordPendingSync
@@ -211,21 +216,27 @@ router.post('/score', protect, validateRequest({
     const scoreBps = asNumber(reputation, 'scoreBps', 0);
     const finalScore = Math.round(scoreBps / 10);
     const totalBatches = asNumber(reputation, 'batches', 1);
-    let batchUpdate;
+    const batchScoreBps = getFinalizedBatchScore(
+      receipt,
+      product.blockchainId,
+      req.body.stakeholderWallet
+    );
+    const batchTrustLevel = await ReputationContract.methods
+      .trustLevelForScore(batchScoreBps)
+      .call();
+    const batchScore = {
+      batchId: product.batchId,
+      blockchainId: product.blockchainId,
+      stakeholderWallet: req.body.stakeholderWallet,
+      scoreBps: batchScoreBps,
+      finalScore: Math.round(batchScoreBps / 10),
+      trustLevel: batchTrustLevel,
+      totalBatches,
+      transactionHash: receipt.transactionHash,
+      finalizedAt: new Date()
+    };
     try {
-      batchUpdate = await Batch.updateOne(
-        { batchId: product.batchId },
-        {
-          $set: {
-            finalReputationScore: finalScore,
-            trustLevel,
-            reputationTxHash: receipt.transactionHash
-          }
-        }
-      );
-      if (batchUpdate.matchedCount !== 1) {
-        throw new Error('Batch record was not found during reputation synchronization');
-      }
+      await saveBatchReputationScore(BatchReputationScore, batchScore);
     } catch (databaseError) {
       return pendingResponse(res, {
         operation: 'reputation_finalized',
@@ -237,7 +248,9 @@ router.post('/score', protect, validateRequest({
           finalScore,
           scoreBps,
           totalBatches,
-          trustLevel
+          trustLevel,
+          batchScoreBps,
+          batchTrustLevel
         }
       });
     }
@@ -256,6 +269,8 @@ router.post('/score', protect, validateRequest({
       complianceScore: req.body.complianceScore,
       finalScore,
       scoreBps,
+      batchScore: batchScore.finalScore,
+      batchScoreBps,
       totalBatches,
       trustLevel,
       inspectionTxHash,
@@ -440,12 +455,9 @@ router.get('/batch/:batchId', protect, async (req, res, next) => {
 
 router.get('/leaderboard/top', async (req, res, next) => {
   try {
-    const topBatches = await Batch.find({
-      inspectionStatus: 'inspected',
-      finalReputationScore: { $exists: true }
-    })
-      .populate('farmer', 'name email location')
-      .sort({ finalReputationScore: -1 })
+    const topBatches = await BatchReputationScore.find()
+      .select('batchId blockchainId stakeholderWallet scoreBps finalScore trustLevel transactionHash finalizedAt')
+      .sort({ scoreBps: -1, finalizedAt: -1 })
       .limit(10);
     return res.json(topBatches);
   } catch (error) {
