@@ -527,7 +527,7 @@ router.get('/:wallet', async (req, res, next) => {
       trustLevel,
       totalBatches: batches,
       lastUpdated: history.length
-        ? new Date(Number(history[history.length - 1].timestamp) * 1000).toLocaleString()
+        ? new Date(Number(history[history.length - 1].timestamp) * 1000).toISOString()
         : null,
       history: history.map((entry) => {
         const batch = scoresByBatch.get(entry.batchId);
@@ -535,7 +535,7 @@ router.get('/:wallet', async (req, res, next) => {
           finalScore: Math.round(Number(entry.scoreBps) / 10),
           scoreBps: Number(entry.scoreBps),
           batchId: entry.batchId,
-          timestamp: new Date(Number(entry.timestamp) * 1000).toLocaleString(),
+          timestamp: new Date(Number(entry.timestamp) * 1000).toISOString(),
           scores: batch ? {
             quality: batch.qualityScore,
             delivery: batch.deliveryScore,

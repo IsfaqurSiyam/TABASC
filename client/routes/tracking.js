@@ -414,7 +414,7 @@ router.get('/:blockchainId', async (req, res, next) => {
         location: getTupleValue(entry, 'location', 2),
         notes: getTupleValue(entry, 'notes', 3),
         dataHash: getTupleValue(entry, 'dataHash', 4),
-        timestamp: time.toLocaleString(),
+        timestamp: time.toISOString(),
         time
       };
     });
@@ -431,7 +431,7 @@ router.get('/:blockchainId', async (req, res, next) => {
           ? event.details?.reason || ''
           : 'Buyer recorded',
       dataHash: event.dataHash,
-      timestamp: event.time.toLocaleString(),
+      timestamp: event.time.toISOString(),
       time: event.time
     }));
     history.push(...additionalEvents);
