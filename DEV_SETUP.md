@@ -70,6 +70,10 @@ MongoDB write fails, the API records a pending sync and returns `202`; rerun
 reconciliation result and remaining pending-sync count are available from the
 admin overview. Inspector scoring records immutable quality and compliance
 values on-chain, then finalizes a score only for an actual journey participant.
+Public scan pages use `GET /api/products/batch/<batchId>`,
+`GET /api/tracking/<blockchainId>`, and
+`GET /api/reputation/product/<batchId>`; the reputation endpoint returns only
+the farmer's score summary and does not expose their wallet address.
 On-chain text is limited to 120 UTF-8 bytes for product names and locations,
 64 bytes for batch IDs, and 500 bytes for shipment notes and recall reasons.
 Consumer feedback is accepted only from the wallet recorded as the buyer of a
@@ -93,7 +97,8 @@ accounts or revoke approved on-chain roles, while only competent authorities
 and courts can decide legal proceedings.
 New registrations are inactive and remain pending until an administrator uses
 “Approve & activate” in the account list. Pending accounts cannot log in and
-receive no login token at registration. Administrators can later deactivate or
+receive no login token at registration. Their encrypted wallets are funded on
+first activation, not at signup. Administrators can later deactivate or
 reactivate approved accounts; pending role requests can be approved only after
 the account itself has been approved.
 Blockchain transactions estimate gas from the requested operation, verify the
