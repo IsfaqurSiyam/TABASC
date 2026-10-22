@@ -171,6 +171,7 @@ contract TrackingContract {
     /// @notice Records the consumer address for a sold product exactly once.
     function recordBuyer(uint256 productId, address buyer) external {
         _requireProduct(productId);
+        _requireNotRecalled(productId);
         if (msg.sender != product.custodianOf(productId)) revert Unauthorized();
         if (!registry.hasRole(registry.RETAILER_ROLE(), msg.sender)) revert Unauthorized();
         if (_currentStatus[productId] != Status.Sold) revert InvalidHandoverStatus();

@@ -288,6 +288,22 @@ contract('TABASC contracts', (accounts) => {
     await expectRevert(tracking.getCurrentStatus(99));
   });
 
+  it('rejects buyer records and feedback for recalled products', async () => {
+    const buyerProductId = await registerProduct();
+    await prepareDelivery(buyerProductId, 20);
+    await sellProduct(buyerProductId, null);
+    await tracking.recall(buyerProductId, 'Safety issue', { from: inspector });
+    await expectRevert(tracking.recordBuyer(buyerProductId, buyer, { from: retailer }));
+
+    const feedbackProductId = await registerProduct();
+    await prepareDelivery(feedbackProductId, 20);
+    await sellProduct(feedbackProductId, buyer);
+    await tracking.recall(feedbackProductId, 'Safety issue', { from: inspector });
+    await expectRevert(
+      reputation.submitFeedback(feedbackProductId, 0, 10000, { from: buyer })
+    );
+  });
+
   it('records an inspector inspection once and rejects invalid scores', async () => {
     const id = await registerProduct();
     await expectRevert(reputation.recordInspection(id, 9000, 9000, { from: outsider }));

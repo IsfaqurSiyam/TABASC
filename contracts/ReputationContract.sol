@@ -156,6 +156,7 @@ contract ReputationContract {
     /// @notice Records feedback from the buyer already recorded for a sold product.
     function submitFeedback(uint256 productId, uint16 complaint, uint16 satisfaction) external {
         _requireProduct(productId);
+        if (tracking.isRecalled(productId)) revert ProductRecalled();
         if (tracking.getCurrentStatus(productId) != IReputationTracking.Status.Sold) {
             revert ProductNotSold();
         }
