@@ -453,6 +453,32 @@ router.get('/batch/:batchId', protect, async (req, res, next) => {
   }
 });
 
+router.get('/product/:batchId', async (req, res, next) => {
+  try {
+    const product = await getProduct(req.params.batchId.trim());
+    const farmerWallet = await ProductContract.methods
+      .farmerOf(product.blockchainId)
+      .call();
+    const [reputation, trustLevel] = await Promise.all([
+      ReputationContract.methods.getReputation(farmerWallet).call(),
+      ReputationContract.methods.getTrustLevel(farmerWallet).call()
+    ]);
+    const scoreBps = asNumber(reputation, 'scoreBps', 0);
+    const exists = reputation.exists === true || reputation.exists === 'true' ||
+      reputation[2] === true || reputation[2] === 'true';
+    if (!exists) {
+      throw new AppError(404, 'REPUTATION_NOT_FOUND', 'No reputation record found for this farmer');
+    }
+    return res.json({
+      finalScore: Math.round(scoreBps / 10),
+      trustLevel,
+      totalBatches: asNumber(reputation, 'batches', 1)
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get('/leaderboard/top', async (req, res, next) => {
   try {
     const topBatches = await BatchReputationScore.find()

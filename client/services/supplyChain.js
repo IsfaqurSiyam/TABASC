@@ -146,11 +146,28 @@ const isExpired = (expiryDate) => {
   return Date.now() >= expiresAt;
 };
 
-const serializeProduct = (product, extra = {}) => ({
-  ...product.toObject(),
-  expired: isExpired(product.expiryDate),
-  ...extra
-});
+const serializeProduct = (product, extra = {}) => {
+  const data = product.toObject();
+  delete data.qrCode;
+  return {
+    ...data,
+    expired: isExpired(product.expiryDate),
+    ...extra
+  };
+};
+
+const serializePublicProduct = (product, extra = {}) => {
+  const serialized = serializeProduct(product, extra);
+  delete serialized.farmerWallet;
+  delete serialized.currentOwner;
+  const farmer = product.farmer && typeof product.farmer === 'object'
+    ? product.farmer
+    : null;
+  serialized.farmer = farmer
+    ? { name: farmer.name, location: farmer.location }
+    : null;
+  return serialized;
+};
 
 const trackingHash = (blockchainId, status, location, notes, actorWallet) => hashRecord({
   actorWallet: actorWallet.toLowerCase(),
@@ -174,6 +191,7 @@ module.exports = {
   requireCustody,
   requireProductDataMatch,
   resolveProduct,
+  serializePublicProduct,
   serializeProduct,
   trackingHash,
   updateProduct

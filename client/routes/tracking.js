@@ -411,7 +411,6 @@ router.get('/:blockchainId', async (req, res, next) => {
       const time = new Date(timestamp * 1000);
       return {
         status: STATUS_LABELS[status],
-        updatedBy: getTupleValue(entry, 'updatedBy', 1),
         location: getTupleValue(entry, 'location', 2),
         notes: getTupleValue(entry, 'notes', 3),
         dataHash: getTupleValue(entry, 'dataHash', 4),
@@ -425,7 +424,6 @@ router.get('/:blockchainId', async (req, res, next) => {
     }).sort({ time: 1 });
     const additionalEvents = transferEvents.map((event) => ({
       status: event.eventType,
-      updatedBy: event.actorWallet,
       location: event.location,
       notes: event.eventType === 'handover'
         ? `Custody transferred to ${event.details?.recipientWallet || ''}`

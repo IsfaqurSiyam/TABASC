@@ -30,6 +30,7 @@ const {
   requireCustody,
   requireProductDataMatch,
   resolveProduct,
+  serializePublicProduct,
   serializeProduct,
   updateProduct
 } = require('../services/supplyChain');
@@ -372,8 +373,7 @@ router.get('/farmer/myproducts', protect, (req, res, next) => {
 router.get('/batch/:batchId', async (req, res, next) => {
   try {
     const product = await Product.findOne({ batchId: req.params.batchId })
-      .populate('farmer', 'name location walletAddress')
-      .populate('currentOwner', 'name role');
+      .populate('farmer', 'name location');
     if (!product) {
       throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
     }
@@ -385,7 +385,7 @@ router.get('/batch/:batchId', async (req, res, next) => {
     } catch (error) {
       if (error.code !== 'PRODUCT_DATA_MISMATCH') throw error;
     }
-    return res.json(serializeProduct(product, {
+    return res.json(serializePublicProduct(product, {
       currentStatus: chainState.status,
       isRecalled: chainState.recalled,
       verifiedOnChain

@@ -56,10 +56,15 @@ router.get('/download/:walletAddress', protect, async (req, res) => {
   }
 });
 
-router.get('/seller/:walletAddress', async (req, res) => {
+router.get('/seller/:walletAddress', protect, async (req, res) => {
   try {
-    const user = await User.findOne({ walletAddress: req.params.walletAddress })
-      .select('name role walletAddress location isActive');
+    const walletAddress = req.params.walletAddress.toLowerCase();
+    if (req.user.role !== 'admin' &&
+        req.user.walletAddress.toLowerCase() !== walletAddress) {
+      return res.status(403).json({ message: 'You can only view your own seller profile' });
+    }
+    const user = await User.findOne({ walletAddress })
+      .select('name role walletAddress');
     if (!user) return res.status(404).json({ message: 'Seller not found' });
     res.json({ seller: user });
   } catch (error) {

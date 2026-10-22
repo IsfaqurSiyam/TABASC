@@ -22,9 +22,11 @@ function ProductScan() {
         const trackRes = await axios.get(`${API_URL}/tracking/${res.data.blockchainId}`);
         setHistory(trackRes.data.history);
 
-        if (res.data.farmer?.walletAddress) {
+        if (res.data.batchId) {
           try {
-            const repRes = await axios.get(`${API_URL}/reputation/${res.data.farmer.walletAddress}`);
+            const repRes = await axios.get(
+              `${API_URL}/reputation/product/${encodeURIComponent(res.data.batchId)}`
+            );
             setReputation(repRes.data);
           } catch {
             // no reputation record yet — that's fine, just skip

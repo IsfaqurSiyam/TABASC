@@ -26,6 +26,8 @@ const {
   deliveryWindowDaysToSeconds,
   hashRecord,
   isExpired,
+  serializePublicProduct,
+  serializeProduct,
   trackingHash
 } = require('../services/supplyChain');
 const { assertChainRole, assertFarmerRole } = require('../services/roleAuthorization');
@@ -285,6 +287,36 @@ test('canonical product hashing normalizes product values deterministically', ()
 
   const changed = canonicalProductFields({ ...fixtureProduct(), quantity: '13' });
   assert.notEqual(hashRecord(normalized), hashRecord(changed));
+});
+
+test('public product serialization excludes QR payloads and wallet identifiers', () => {
+  const product = {
+    toObject: () => ({
+      _id: 'product-id',
+      batchId: 'BATCH-01',
+      farmerWallet: '0xfarmer',
+      qrCode: 'data:image/png;base64,sensitive-payload',
+      farmer: { _id: 'farmer-id', name: 'Farmer', email: 'farmer@example.test', location: 'Farm' },
+      currentOwner: { _id: 'owner-id', name: 'Owner', email: 'owner@example.test' }
+    }),
+    farmer: {
+      _id: 'farmer-id',
+      name: 'Farmer',
+      email: 'farmer@example.test',
+      location: 'Farm',
+      walletAddress: '0xfarmer'
+    }
+  };
+  const publicProduct = serializePublicProduct(product, { verifiedOnChain: true });
+
+  assert.equal(publicProduct.batchId, 'BATCH-01');
+  assert.deepEqual(publicProduct.farmer, { name: 'Farmer', location: 'Farm' });
+  assert.equal('qrCode' in publicProduct, false);
+  assert.equal('farmerWallet' in publicProduct, false);
+  assert.equal('currentOwner' in publicProduct, false);
+  assert.equal('email' in publicProduct.farmer, false);
+  assert.equal('walletAddress' in publicProduct.farmer, false);
+  assert.equal('qrCode' in serializeProduct(product), false);
 });
 
 test('delivery windows entered in days convert to bounded seconds before hashing and storage', () => {
