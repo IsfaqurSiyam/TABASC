@@ -260,6 +260,18 @@ contract('TABASC contracts', (accounts) => {
     await expectRevert(reputation.recordInspection(99, 7000, 7000, { from: inspector }));
   });
 
+  it('rejects self-inspection, recalled scoring, and delivery windows over one year', async () => {
+    await expectRevert(registerProduct(10n ** 18n));
+    const id = await registerProduct(365 * 24 * 60 * 60);
+    assert.equal((await product.deliveryWindowOf(id)).toString(), '31536000');
+    await registry.grantRole(await registry.INSPECTOR_ROLE(), farmer, { from: admin });
+    await expectRevert(reputation.recordInspection(id, 10000, 10000, { from: farmer }));
+    await reputation.recordInspection(id, 10000, 10000, { from: inspector });
+    await tracking.recall(id, 'Unsafe product', { from: inspector });
+    await expectRevert(reputation.finalizeScore(id, farmer, { from: inspector }));
+    assert.equal((await reputation.getReputation(farmer)).exists, false);
+  });
+
   it('accepts feedback only from the recorded buyer of a sold product', async () => {
     const id = await registerProduct();
     await expectRevert(reputation.submitFeedback(id, 5000, 7000, { from: buyer }));
@@ -285,6 +297,20 @@ contract('TABASC contracts', (accounts) => {
     assert.equal(score.exists, false);
     assert.equal(score.batches.toString(), '0');
     assert.equal((await reputation.getHistory(farmer)).length, 0);
+  });
+
+  it('reproduces finalization before feedback permanently ignoring a later review', async () => {
+    const id = await registerProduct(1000);
+    await prepareDelivery(id, 20);
+    await sellProduct(id);
+    await reputation.recordInspection(id, 10000, 10000, { from: inspector });
+    await reputation.finalizeScore(id, farmer, { from: inspector });
+    const scoreBeforeFeedback = await reputation.getReputation(farmer);
+    await reputation.submitFeedback(id, 9000, 1000, { from: buyer });
+    await expectRevert(reputation.finalizeScore(id, farmer, { from: inspector }));
+    const scoreAfterFeedback = await reputation.getReputation(farmer);
+    assert.equal(scoreBeforeFeedback.scoreBps.toString(), '10000');
+    assert.equal(scoreAfterFeedback.scoreBps.toString(), '10000');
   });
 
   it('scores worse feedback lower while preserving raw complaint values', async () => {

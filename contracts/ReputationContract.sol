@@ -29,6 +29,7 @@ interface IReputationTracking {
     function actorOf(uint256 productId, Status status) external view returns (address);
     function actedAtOf(uint256 productId, Status status) external view returns (uint256);
     function buyerOf(uint256 productId) external view returns (address);
+    function isRecalled(uint256 productId) external view returns (bool);
 }
 
 /// @title ReputationContract
@@ -93,6 +94,8 @@ contract ReputationContract {
     error InvalidThresholds();
     error DeliveryNotAvailable();
     error InvalidDeliveryWindow();
+    error SelfInspection();
+    error ProductRecalled();
 
     event InspectionRecorded(
         uint256 indexed productId,
@@ -136,6 +139,7 @@ contract ReputationContract {
     function recordInspection(uint256 productId, uint16 quality, uint16 compliance) external {
         _requireProduct(productId);
         _requireInspector();
+        if (isParticipant(productId, msg.sender)) revert SelfInspection();
         if (quality > 10000 || compliance > 10000) revert InvalidScore();
         if (_inspections[productId].exists) revert AlreadyInspected();
 
@@ -173,7 +177,11 @@ contract ReputationContract {
     function finalizeScore(uint256 productId, address stakeholder) external returns (uint256 scoreBps) {
         _requireProduct(productId);
         _requireInspector();
+        if (tracking.isRecalled(productId)) revert ProductRecalled();
         if (!_inspections[productId].exists) revert InspectionRequired();
+        if (isParticipant(productId, _inspections[productId].inspector)) {
+            revert SelfInspection();
+        }
         if (!isParticipant(productId, stakeholder)) revert NonParticipant();
         if (_finalized[productId][stakeholder]) revert AlreadyFinalized();
 
