@@ -1,15 +1,26 @@
 # Local development
 
-Use Node.js and MongoDB locally. Start the persistent, deterministic Ganache
-development chain with:
+Use Node.js and MongoDB locally. Install the root Truffle toolchain and the
+application dependencies:
+
+```powershell
+npm ci
+npm ci --prefix client
+npm ci --prefix frontend
+```
+
+The root package declares the Truffle version used for compilation, migrations,
+and contract tests. `npm test --prefix client` compiles contracts first, so a
+fresh clone does not need ignored `build/contracts` artifacts.
+
+Start the persistent, deterministic Ganache development chain with:
 
 ```powershell
 npm run ganache:start --prefix client
 ```
 
 This binds to `127.0.0.1:8545`, uses network ID `5777`, and retains chain data
-in `ganache-data`. The command uses Ganache bundled with Truffle; no additional
-package is required. It uses deterministic development-only accounts. Do not
+in `ganache-data`. It uses deterministic development-only accounts. Do not
 use the development mnemonic or these accounts for real funds.
 
 Copy `.env.example` to `client/.env` and replace the placeholder secrets and
@@ -22,9 +33,17 @@ Before startup, confirm every key in `.env.example` is present in
 `client/.env`. Keep the wallet passphrase consistent with existing encrypted
 wallets; changing it can make those wallets unusable.
 
-After migrating contracts, run `npm run sync:env --prefix client` to update the
-deployed contract addresses in `client/.env`. The script preserves other
-settings and the existing line-ending style.
+After a contract change, redeploy in this order:
+
+```powershell
+npm run contracts:compile --prefix client
+npm run contracts:migrate --prefix client
+npm run sync:env --prefix client
+npm run sync:roles --prefix client
+```
+
+Migration deploys new contract instances; it does not copy prior contract
+state. The environment-sync script preserves other settings and line endings.
 
 Start the backend with `npm start --prefix client` after MongoDB, Ganache, and
 the contracts are available. `GET /api/health` reports database, chain,

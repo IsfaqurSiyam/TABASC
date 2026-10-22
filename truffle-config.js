@@ -1,4 +1,7 @@
+const path = require("path");
+
 module.exports = {
+  test_directory: path.resolve(__dirname, "test"),
   networks: {
     development: {
       host: "127.0.0.1",
