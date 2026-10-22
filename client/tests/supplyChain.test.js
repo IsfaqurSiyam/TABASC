@@ -38,7 +38,8 @@ const {
   assertSufficientBalance,
   mapContractRevert
 } = require('../blockchain/wallets');
-const { web3 } = require('../blockchain/web3');
+const { web3, TrackingContract } = require('../blockchain/web3');
+const { formatCareAttestation, readCareAttestation } = require('../services/careAttestation');
 const {
   getFinalizedBatchScore,
   saveBatchReputationScore
@@ -143,6 +144,69 @@ test('common custom contract reverts map to actionable API errors', () => {
   assert.equal(mapped.status, 409);
   assert.equal(mapped.code, 'DUPLICATE_BATCH');
   assert.match(mapped.message, /batch ID already exists/i);
+
+  const careSelector = web3.utils.keccak256('CareIssueExplanationTooShort()').slice(0, 10);
+  const careError = mapContractRevert({
+    name: 'ContractExecutionError',
+    code: 310,
+    cause: { data: `${careSelector}00000000` }
+  });
+  assert.equal(careError.code, 'CARE_ISSUE_EXPLANATION_TOO_SHORT');
+  assert.match(careError.message, /20 UTF-8 bytes/);
+});
+
+test('care attestation responses convert chain timestamps to ISO dates', () => {
+  const care = formatCareAttestation({
+    distributor: '0xdistributor',
+    retailer: '0xretailer',
+    storedSince: '1792663713',
+    handedOverAt: '1792922913',
+    storageDays: '3',
+    storageSeconds: '259200',
+    temperatureMaintained: true,
+    packagingIntact: false,
+    hygieneMaintained: true,
+    noDamageOrSpoilage: true,
+    explanation: 'Packaging was compromised during storage.',
+    detailsHash: '0xhash'
+  });
+  assert.equal(care.storedSince, '2026-10-22T10:08:33.000Z');
+  assert.equal(care.handedOverAt, '2026-10-25T10:08:33.000Z');
+  assert.equal(care.storageDays, 3);
+  assert.equal(care.packagingIntact, false);
+  assert.equal(care.detailsHash, '0xhash');
+});
+
+test('care handover encodes its checklist and attestation reads from chain', async () => {
+  const encoded = TrackingContract.methods.handoverWithCare(
+    1,
+    '0x2222222222222222222222222222222222222222',
+    [true, false, true, true],
+    'Packaging was damaged during warehouse storage.'
+  ).encodeABI();
+  assert.match(encoded, /^0x[0-9a-f]+$/i);
+
+  const entry = {
+    distributor: '0x1111111111111111111111111111111111111111',
+    retailer: '0x2222222222222222222222222222222222222222',
+    storedSince: '1792663713',
+    handedOverAt: '1792922913',
+    storageDays: '3',
+    storageSeconds: '259200',
+    temperatureMaintained: true,
+    packagingIntact: false,
+    hygieneMaintained: true,
+    noDamageOrSpoilage: true,
+    explanation: 'Packaging was damaged during warehouse storage.',
+    detailsHash: '0xhash'
+  };
+  const chain = {
+    methods: {
+      hasCareAttestation: () => ({ call: async () => true }),
+      getCareAttestation: () => ({ call: async () => entry })
+    }
+  };
+  assert.deepEqual(await readCareAttestation(chain, 1), formatCareAttestation(entry));
 });
 
 test('product reconciliation refuses to overwrite a different record using the same chain ID', () => {

@@ -2,12 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
 import { API_URL } from '../config/api';
+import StorageCareAttestation from '../components/Common/StorageCareAttestation';
 
 function ProductScan() {
   const { batchId } = useParams();
   const [product, setProduct] = useState(null);
   const [history, setHistory] = useState([]);
   const [reputation, setReputation] = useState(null);
+  const [careAttestation, setCareAttestation] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -23,6 +25,14 @@ function ProductScan() {
 
         const trackRes = await axios.get(`${API_URL}/tracking/${res.data.blockchainId}`);
         setHistory(trackRes.data.history);
+        try {
+          const careRes = await axios.get(
+            `${API_URL}/tracking/${res.data.blockchainId}/care`
+          );
+          setCareAttestation(careRes.data.careAttestation);
+        } catch {
+          setCareAttestation(null);
+        }
 
         if (res.data.batchId) {
           try {
@@ -127,6 +137,8 @@ function ProductScan() {
           </p>
         </div>
       )}
+
+      <StorageCareAttestation care={careAttestation} />
 
       <div className="public-section">
         <h4 style={{ marginTop: 0 }}>Supply Chain Journey</h4>

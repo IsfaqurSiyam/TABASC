@@ -78,12 +78,22 @@ contract('TABASC contracts', (accounts) => {
   }
 
   async function sellProduct(productId, recordedBuyer = buyer) {
-    await tracking.handover(productId, retailer, { from: distributor });
+    await recordCare(productId);
     await update(productId, 4, retailer, 'Shop');
     await update(productId, 5, retailer, 'Shop');
     if (recordedBuyer) {
       await tracking.recordBuyer(productId, recordedBuyer, { from: retailer });
     }
+  }
+
+  async function recordCare(productId, flags = [true, true, true, true], explanation = 'Product remained in proper storage conditions.') {
+    return tracking.handoverWithCare(
+      productId,
+      retailer,
+      flags,
+      explanation,
+      { from: distributor }
+    );
   }
 
   beforeEach(async () => {
@@ -217,7 +227,13 @@ contract('TABASC contracts', (accounts) => {
     await update(id, 3, distributor);
     await expectRevert(tracking.handover(id, retailer, { from: outsider }));
     await expectRevert(tracking.handover(id, outsider, { from: distributor }));
-    await tracking.handover(id, retailer, { from: distributor });
+    await expectRevert(tracking.handover(id, retailer, { from: distributor }));
+    await recordCare(id);
+    const attestation = await tracking.getCareAttestation(id);
+    assert.equal(attestation.distributor, distributor);
+    assert.equal(attestation.retailer, retailer);
+    assert.equal(await tracking.hasCareAttestation(id), true);
+    assert.equal(await product.custodianOf(id), retailer);
     await expectRevert(update(id, 4, distributor));
     await update(id, 4, retailer);
     await update(id, 5, retailer);
@@ -250,7 +266,7 @@ contract('TABASC contracts', (accounts) => {
     await update(id, 3, distributor);
     await expectRevert(tracking.handover(id, retailer, { from: distributor }));
     await registry.grantRole(await registry.RETAILER_ROLE(), retailer, { from: admin });
-    await tracking.handover(id, retailer, { from: distributor });
+    await recordCare(id);
     await registry.revokeRole(await registry.RETAILER_ROLE(), retailer, { from: admin });
     await expectRevert(update(id, 4, retailer));
     await registry.grantRole(await registry.RETAILER_ROLE(), retailer, { from: admin });
@@ -259,6 +275,67 @@ contract('TABASC contracts', (accounts) => {
     await expectRevert(tracking.actorOf(0, 0));
     await expectRevert(tracking.actedAtOf(99, 0));
     await expectRevert(tracking.isRecalled(99));
+  });
+
+  it('requires valid distributor care details and records an immutable handover attestation', async () => {
+    const id = await registerProduct();
+    await prepareDelivery(id, 20);
+    await expectRevert(recordCare(id, [false, true, true, true], 'Damaged'));
+    await expectRevert(recordCare(id, [true, true, true, true], ''));
+    await expectRevert(recordCare(id, [true, true, true, true], '   '));
+    await expectRevert(tracking.handoverWithCare(
+      id, retailer, [true, true, true, true], 'Valid storage condition details.',
+      { from: farmer }
+    ));
+    await registry.revokeRole(await registry.DISTRIBUTOR_ROLE(), distributor, { from: admin });
+    await expectRevert(tracking.handoverWithCare(
+      id, retailer, [true, true, true, true], 'Valid storage condition details.',
+      { from: distributor }
+    ));
+    await registry.grantRole(await registry.DISTRIBUTOR_ROLE(), distributor, { from: admin });
+    await expectRevert(tracking.handoverWithCare(
+      id, retailer, [true, true, true, true], 'Valid storage condition details.',
+      { from: outsider }
+    ));
+
+    const tx = await recordCare(id, [false, true, true, true], 'Temperature was above the safe range during storage.');
+    const attestation = await tracking.getCareAttestation(id);
+    assert.equal(attestation.temperatureMaintained, false);
+    assert.equal(attestation.packagingIntact, true);
+    assert.equal(attestation.explanation, 'Temperature was above the safe range during storage.');
+    assert.notEqual(attestation.detailsHash, `0x${'0'.repeat(64)}`);
+    assert.equal(await tracking.hasCareAttestation(id), true);
+    assert.equal(await product.custodianOf(id), retailer);
+    const emitted = tx.logs.find((log) => log.event === 'CareAttestationRecorded').args;
+    assert.equal(emitted.productId.toString(), String(id));
+    assert.equal(emitted.distributor, distributor);
+    assert.equal(emitted.retailer, retailer);
+    assert.equal(emitted.storedSince.toString(), attestation.storedSince.toString());
+    assert.equal(emitted.handedOverAt.toString(), attestation.handedOverAt.toString());
+    assert.equal(emitted.storageDays.toString(), attestation.storageDays.toString());
+    assert.equal(emitted.storageSeconds.toString(), attestation.storageSeconds.toString());
+    assert.equal(emitted.temperatureMaintained, false);
+    assert.equal(emitted.explanation, attestation.explanation);
+    assert.equal(emitted.detailsHash, attestation.detailsHash);
+    await expectRevert(recordCare(id));
+    console.log(`Care attestation transaction gas used: ${tx.receipt.gasUsed}`);
+  });
+
+  it('computes storage duration from Delivered and handover timestamps', async () => {
+    for (const days of [0, 1, 3, 10]) {
+      const id = await registerProduct();
+      await prepareDelivery(id, 20);
+      const storedSince = Number(await tracking.actedAtOf(id, 3));
+      if (days > 0) await rpc('evm_increaseTime', [days * 86400]);
+      await recordCare(id);
+
+      const attestation = await tracking.getCareAttestation(id);
+      const elapsed = Number(attestation.handedOverAt) - storedSince;
+      assert.equal(Number(attestation.storedSince), storedSince);
+      assert.equal(Number(attestation.storageSeconds), elapsed);
+      assert.equal(Number(attestation.storageDays), Math.floor(elapsed / 86400));
+      assert.equal(Number(attestation.storageDays), days);
+    }
   });
 
   it('requires a sold product and its retailer to record a buyer exactly once', async () => {

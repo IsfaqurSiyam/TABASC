@@ -53,14 +53,38 @@ contract artifacts already existed in the working tree.
 | L7 | CONFIRMED | A strict Truffle reproduction showed a 121-byte product name was accepted; the prior test helper accidentally counted its own "Expected transaction to revert" assertion as a revert. Backend UTF-8 validation also accepted an over-limit value because `maxLength` was unsupported. | Enforced aligned UTF-8 byte limits in Product/Tracking contracts, API validation, and relevant frontend forms; custom `FieldTooLong` errors map to a clear API message. Corrected the Truffle revert helper and added oversized contract-string and UTF-8 backend regression tests. After fix: contracts 21, backend 26, frontend 11; production build passed. Contract changes require redeployment. | 2cc7971 |
 | L8 | CONFIRMED | A Truffle reproduction sold two products, recalled them, then showed `recordBuyer` still succeeded; source inspection showed `submitFeedback` likewise lacked the backend's recall guard. | Both contracts now reject buyer records and feedback for recalled products. Added a Truffle regression for each. After fix: contracts 22, backend 26, frontend 11; production build passed. Contract changes require redeployment. | 6d1fd32 |
 | L9 | CONFIRMED | `FIXES_DOCUMENTATION.md` described obsolete `.js` component paths, a token returned at registration, an immediate role-based registration flow, and bcrypt cost 10; current code uses `.jsx`, inactive pending accounts, no registration token, and bcrypt cost 12. | Replaced it with accurate current registration/approval/funding behavior, the promise-based Mongoose hook explanation, current file names, and the test command. | c098274 |
+| P3 | IMPLEMENTED | Owner confirmed `Delivered` begins storage; chain testing reproduced computed storage durations and required attestation behavior. | Added immutable on-chain care attestation, chain-derived preview/read APIs, pending-sync replay, and distributor/retailer/consumer/public UI. | pending |
 
-## Phase 3 design gate
+## Phase 3: distributor storage-care attestation
 
-The UI/docs found so far call this lifecycle state “Delivered” or describe
-receipt at a store, but do not define its timestamp as arrival at a distributor
-warehouse. The requested feature requires that exact definition to calculate
-storage duration. Stop before implementing the attestation until the project
-owner chooses the authoritative storage-start and handover timestamps.
+The project owner confirmed the authoritative interval: storage begins at the
+on-chain `Delivered` timestamp and ends at the distributor-to-retailer custody
+handover. The contract now requires a single immutable care attestation at
+that handover. It stores the distributor and retailer wallets, both timestamps,
+chain-computed elapsed seconds and whole days, four checklist flags, the
+required explanation, and a hash of the details. A false checklist item
+requires at least 20 UTF-8 bytes of explanation; all explanations are capped
+at 500 bytes. The prior `handover` path remains valid only for the
+farmer-to-distributor transfer and reverts at `Delivered`.
+
+The backend requires the checklist for distributor-to-retailer transfer,
+reports a chain-derived elapsed-time preview to the distributor, and serves
+the attestation from chain through `GET /api/tracking/:blockchainId/care`.
+MongoDB handover event details and pending-sync payloads carry the attestation;
+reconciliation reads it back from chain before saving a pending event.
+Distributor, retailer, consumer, and public scan views show the recorded
+checklist, duration, explanation, dates, and distributor wallet. Checklist and
+explanation are self-declared; only duration is chain-verified. No reputation
+scoring was changed.
+
+Truffle regressions cover 0, 1, 3, and 10 storage days, validation failures,
+non-custodian and non-distributor attempts, duplicate/legacy handover paths,
+retailer custody, and the attestation values. A measured handover with one
+failed checklist flag and a 52-byte explanation used 316,775 gas. Contract
+changes require redeployment; no migration or state transfer was performed.
+Existing products on the current deployment do not gain retroactive
+attestations; new handovers on the redeployed contract must use the
+care-attestation path.
 
 ## M3 custodial-wallet limitations
 
@@ -89,9 +113,9 @@ product lookups but do not address contract storage growth or read cost.
 
 | Check | Result |
 |---|---|
-| `npm run contracts:test --prefix client` | 22 passing |
-| `npm test --prefix client` | 26 passing |
-| `npm test --prefix frontend` | 11 passing |
+| `npm run contracts:test --prefix client` | 24 passing |
+| `npm test --prefix client` | 28 passing |
+| `npm test --prefix frontend` | 14 passing |
 | `npm run build --prefix frontend` | Passed |
 | `npm audit --prefix frontend` | 0 vulnerabilities |
 | `npm audit --prefix client` | 0 vulnerabilities |
@@ -108,10 +132,8 @@ contract suite.
   This requires an isolated database fixture containing at least 26 products
   and a browser-capable UI run. The API pagination and client display behavior
   remain unchanged.
-- **Phase 3 timestamp decision:** Confirm whether storage starts at the
-  distributor's `Delivered` timestamp and ends at the on-chain
-  distributor-to-retailer handover timestamp. The attestation feature remains
-  unimplemented until this is confirmed.
+- **Phase 3 reputation policy:** Decide whether failed care checklist items
+  should affect a distributor's score later; scoring was not changed here.
 - **M1.1:** Decide whether scoring waits for a feedback period/deadline or an
   explicit close action before finalization.
 - **M1.4:** Decide whether trust labels require a minimum number of finalized
@@ -120,8 +142,6 @@ contract suite.
   acknowledgment or purchase proof.
 - **M1.7:** Decide whether reputation configuration changes need versioning
   and whether prior scores should ever be recomputed.
-- **Phase 3 reputation policy:** Decide whether failed care checklist items
-  should affect a distributor's score later; scoring was not changed here.
 
 ## Existing-data and deployment effects
 
@@ -132,5 +152,8 @@ contract suite.
 - Contract changes under M1, L7 and L8 require redeployment. A deployment
   creates new contract instances and does not copy prior on-chain state; no
   migration or environment/role synchronization was run in this checkup.
+- The Phase 3 care attestation is available only after the updated Tracking
+  contract is deployed. Existing products on the previous contract are not
+  copied into a new deployment and receive no retroactive attestation.
 - Wallet registration now defers funding until first admin activation;
   existing active wallets were not changed by this flow update.

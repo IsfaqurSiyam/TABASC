@@ -2,6 +2,7 @@ import React, { lazy, Suspense, useState } from 'react';
 import axios from 'axios';
 import { Link } from 'react-router-dom';
 import { API_URL } from '../../config/api';
+import StorageCareAttestation from '../Common/StorageCareAttestation';
 
 const ReputationScanner = lazy(() => import('../Common/ReputationScanner'));
 
@@ -9,6 +10,7 @@ function ConsumerDashboard() {
   const [batchId, setBatchId] = useState('');
   const [product, setProduct] = useState(null);
   const [history, setHistory] = useState([]);
+  const [careAttestation, setCareAttestation] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -24,6 +26,7 @@ function ConsumerDashboard() {
     setError('');
     setProduct(null);
     setHistory([]);
+    setCareAttestation(null);
     setFeedbackEligibility(null);
     setFeedbackMsg('');
     setFeedbackError('');
@@ -50,6 +53,12 @@ function ConsumerDashboard() {
         setFeedbackError(
           eligibilityResult.reason.response?.data?.message || 'Unable to check feedback eligibility'
         );
+      }
+      try {
+        const careResult = await axios.get(`${API_URL}/tracking/${res.data.blockchainId}/care`);
+        setCareAttestation(careResult.data.careAttestation);
+      } catch {
+        setCareAttestation(null);
       }
     } catch (err) {
       setError(err.response?.data?.message || 'Product not found');
@@ -139,6 +148,8 @@ function ConsumerDashboard() {
           <p><strong>Category:</strong> {product.category}</p>
           <p><strong>Current Status:</strong> {product.currentStatus}</p>
           <p><strong>Farmer:</strong> {product.farmer?.name} — {product.farmer?.location}</p>
+
+          <StorageCareAttestation care={careAttestation} />
 
           <h4>Supply Chain History</h4>
           {history.length === 0 ? (

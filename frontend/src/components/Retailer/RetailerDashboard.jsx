@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import ReputationQRCode from '../Common/ReputationQRCode';
 import SupplyChainActions from '../Common/SupplyChainActions';
+import StorageCareAttestation from '../Common/StorageCareAttestation';
 import { API_URL } from '../../config/api';
 
 function RetailerDashboard() {
@@ -21,7 +22,16 @@ function RetailerDashboard() {
   const fetchProducts = async () => {
     try {
       const res = await axios.get(`${API_URL}/products`);
-      setProducts(res.data);
+      const withCare = await Promise.all(res.data.map(async (product) => {
+        if (product.currentStatus === 'Harvested') return product;
+        try {
+          const care = await axios.get(`${API_URL}/tracking/${product.blockchainId}/care`);
+          return { ...product, careAttestation: care.data.careAttestation };
+        } catch {
+          return product;
+        }
+      }));
+      setProducts(withCare);
     } catch (err) {
       console.error(err);
     }
@@ -119,6 +129,10 @@ function RetailerDashboard() {
       </form>
 
       <SupplyChainActions products={products} role="retailer" onComplete={fetchProducts} />
+
+      {products.filter((product) => product.careAttestation).map((product) => (
+        <StorageCareAttestation key={product._id} care={product.careAttestation} />
+      ))}
 
       <div className="section-heading">
         <h3>All Products</h3>

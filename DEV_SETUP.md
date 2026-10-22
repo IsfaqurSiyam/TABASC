@@ -74,6 +74,20 @@ Public scan pages use `GET /api/products/batch/<batchId>`,
 `GET /api/tracking/<blockchainId>`, and
 `GET /api/reputation/product/<batchId>`; the reputation endpoint returns only
 the farmer's score summary and does not expose their wallet address.
+Distributor-to-retailer custody transfer requires a care attestation:
+`POST /api/products/<productId>/handover` accepts the existing `email` plus
+`care.temperatureMaintained`, `care.packagingIntact`, `care.hygieneMaintained`,
+`care.noDamageOrSpoilage`, and a required `explanation`. A failed checklist
+item requires at least 20 UTF-8 bytes of explanation; explanations are limited
+to 500 bytes. The distributor form's
+`GET /api/products/<productId>/care-preview` reports the on-chain `Delivered`
+timestamp and elapsed storage. `GET /api/tracking/<blockchainId>/care` returns
+the immutable on-chain attestation (or `hasAttestation: false`) with ISO dates.
+Storage starts at the chain's `Delivered` timestamp and ends at the recorded
+distributor-to-retailer handover; the contract computes elapsed seconds and
+whole storage days. The checklist and explanation are self-declared; only the
+duration is verified by chain timestamps. The new contract ABI requires the
+full compile, migration, environment sync, and role sync sequence above.
 On-chain text is limited to 120 UTF-8 bytes for product names and locations,
 64 bytes for batch IDs, and 500 bytes for shipment notes and recall reasons.
 Consumer feedback is accepted only from the wallet recorded as the buyer of a

@@ -13,6 +13,7 @@ const { sendFromWallet } = require('../blockchain/wallets');
 const { AppError } = require('../middleware/errors');
 const { validateRequest } = require('../middleware/requestValidation');
 const { assertChainRole } = require('../services/roleAuthorization');
+const { readCareAttestation } = require('../services/careAttestation');
 const {
   STATUS_LABELS,
   STATUS_MAP,
@@ -391,6 +392,22 @@ router.post('/:id/recall', protect, validateRequest({
       blockchainId: product.blockchainId,
       reason,
       txHash: receipt.transactionHash
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get('/:blockchainId/care', async (req, res, next) => {
+  try {
+    const blockchainId = getBlockchainId(req.params.blockchainId);
+    const product = await Product.findOne({ blockchainId, isActive: true });
+    if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
+    const careAttestation = await readCareAttestation(TrackingContract, blockchainId);
+    return res.json({
+      blockchainId,
+      hasAttestation: Boolean(careAttestation),
+      careAttestation
     });
   } catch (error) {
     return next(error);

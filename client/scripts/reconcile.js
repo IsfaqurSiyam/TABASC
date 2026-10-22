@@ -11,11 +11,20 @@ const config = require('../config/env');
 const connectDB = require('../config/db');
 const { archiveDisplacedProduct, assertProductRegistrationTarget } = require('../services/productRegistrationSync');
 const { saveBatchReputationScore } = require('../services/reputationScores');
-const { web3, ProductContract } = require('../blockchain/web3');
+const { web3, ProductContract, TrackingContract } = require('../blockchain/web3');
+const { readCareAttestation } = require('../services/careAttestation');
 
 const saveTrackingEvent = async (pending, product) => {
   const event = pending.payload.event;
   if (!event) throw new Error(`Pending transaction ${pending.txHash} has no event payload`);
+  let details = event.details || {};
+  if (pending.payload.careRequested) {
+    const careAttestation = await readCareAttestation(TrackingContract, pending.blockchainId);
+    if (!careAttestation) {
+      throw new Error(`Care attestation for product ${pending.blockchainId} is missing on-chain`);
+    }
+    details = { ...details, care: careAttestation };
+  }
   await TrackingEvent.updateOne(
     { txHash: pending.txHash },
     {
@@ -31,7 +40,7 @@ const saveTrackingEvent = async (pending, product) => {
         dataHash: event.dataHash,
         txHash: pending.txHash,
         time: event.time ? new Date(event.time) : new Date(),
-        details: event.details || {}
+        details
       }
     },
     { upsert: true }

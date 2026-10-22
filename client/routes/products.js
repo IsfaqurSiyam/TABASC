@@ -17,6 +17,7 @@ const { sendFromWallet } = require('../blockchain/wallets');
 const { AppError } = require('../middleware/errors');
 const { validateRequest } = require('../middleware/requestValidation');
 const { assertChainRole, assertFarmerRole } = require('../services/roleAuthorization');
+const { readCareAttestation } = require('../services/careAttestation');
 const {
   STATUS_LABELS,
   STATUS_MAP,
@@ -182,6 +183,25 @@ const handlePendingSync = async (res, details) => {
     txHash: details.txHash,
     pendingSyncId: pending._id
   });
+};
+
+const validateCarePayload = (req, res, next) => {
+  if (req.body.care === undefined) return next();
+  if (!req.body.care || typeof req.body.care !== 'object' || Array.isArray(req.body.care)) {
+    return next(new AppError(400, 'VALIDATION_ERROR', 'care must be an object'));
+  }
+  const fields = [
+    'temperatureMaintained',
+    'packagingIntact',
+    'hygieneMaintained',
+    'noDamageOrSpoilage'
+  ];
+  for (const field of fields) {
+    if (typeof req.body.care[field] !== 'boolean') {
+      return next(new AppError(400, 'VALIDATION_ERROR', `care.${field} must be boolean`));
+    }
+  }
+  return next();
 };
 
 router.post('/register', protect, validateRequest({
@@ -421,10 +441,44 @@ router.get('/:id/qr', protect, async (req, res, next) => {
   }
 });
 
+router.get('/:id/care-preview', protect, async (req, res, next) => {
+  try {
+    if (req.user.role !== 'distributor') {
+      throw new AppError(403, 'FORBIDDEN', 'Only distributors can view the storage preview');
+    }
+    const product = await resolveProduct(req.params.id);
+    if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
+    const chainState = await currentChainState(product.blockchainId);
+    if (chainState.status !== 'Delivered') {
+      throw new AppError(409, 'INVALID_HANDOVER_STATUS', 'Storage preview is available after Delivered');
+    }
+    await requireCustody(product, req.user);
+    await assertChainRole(RoleRegistryContract, 'distributor', req.user.walletAddress);
+
+    const storedSince = Number(await TrackingContract.methods
+      .actedAtOf(product.blockchainId, STATUS_MAP.Delivered)
+      .call());
+    const latestBlock = await web3.eth.getBlock('latest');
+    const elapsed = Math.max(0, Number(latestBlock.timestamp) - storedSince);
+    return res.json({
+      blockchainId: product.blockchainId,
+      storedSince: new Date(storedSince * 1000).toISOString(),
+      storageSeconds: elapsed,
+      storageDays: Math.floor(elapsed / 86400)
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.post('/:id/handover', protect, validateRequest({
   params: { id: { required: true, type: 'string' } },
-  body: { email: { required: true, type: 'string', pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ } }
-}), async (req, res, next) => {
+  body: {
+    email: { required: true, type: 'string', pattern: /^[^\s@]+@[^\s@]+\.[^\s@]+$/ },
+    care: { type: 'object' },
+    explanation: { type: 'string', maxLength: 500 }
+  }
+}), validateCarePayload, async (req, res, next) => {
   try {
     const product = await resolveProduct(req.params.id);
     if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
@@ -443,6 +497,31 @@ router.post('/:id/handover', protect, validateRequest({
     if (req.user.role !== (expectedRole === 'distributor' ? 'farmer' : 'distributor')) {
       throw new AppError(403, 'FORBIDDEN', 'Your role cannot hand over this product at its current status');
     }
+    let careRequest = null;
+    let explanation = '';
+    if (expectedRole === 'retailer') {
+      if (!req.body.care || typeof req.body.explanation !== 'string') {
+        throw new AppError(400, 'CARE_ATTESTATION_REQUIRED', 'Complete the care checklist and explanation before handover');
+      }
+      explanation = req.body.explanation.trim();
+      if (!explanation) {
+        throw new AppError(400, 'EMPTY_CARE_EXPLANATION', 'Care explanation is required');
+      }
+      const flags = [
+        req.body.care.temperatureMaintained,
+        req.body.care.packagingIntact,
+        req.body.care.hygieneMaintained,
+        req.body.care.noDamageOrSpoilage
+      ];
+      if (flags.some((flag) => !flag) && Buffer.byteLength(explanation, 'utf8') < 20) {
+        throw new AppError(
+          400,
+          'CARE_ISSUE_EXPLANATION_TOO_SHORT',
+          'Explain any failed care checklist item in at least 20 UTF-8 bytes'
+        );
+      }
+      careRequest = { ...req.body.care, explanation };
+    }
     const senderRole = expectedRole === 'distributor' ? 'farmer' : 'distributor';
     await assertChainRole(RoleRegistryContract, senderRole, req.user.walletAddress);
 
@@ -456,15 +535,62 @@ router.post('/:id/handover', protect, validateRequest({
     }
     await assertChainRole(RoleRegistryContract, expectedRole, recipient.walletAddress);
 
-    const method = TrackingContract.methods.handover(
-      product.blockchainId,
-      recipient.walletAddress
-    );
+    const method = careRequest
+      ? TrackingContract.methods.handoverWithCare(
+        product.blockchainId,
+        recipient.walletAddress,
+        [
+          careRequest.temperatureMaintained,
+          careRequest.packagingIntact,
+          careRequest.hygieneMaintained,
+          careRequest.noDamageOrSpoilage
+        ],
+        explanation
+      )
+      : TrackingContract.methods.handover(product.blockchainId, recipient.walletAddress);
     const encryptedWallet = await loadEncryptedWallet(req.user._id);
     const receipt = await sendFromWallet(encryptedWallet, {
       to: TrackingContract.options.address,
       data: method.encodeABI()
     });
+    let careAttestation = null;
+    if (careRequest) {
+      try {
+        careAttestation = await readCareAttestation(TrackingContract, product.blockchainId);
+      } catch (readError) {
+        return handlePendingSync(res, {
+          operation: 'custody_transferred',
+          blockchainId: product.blockchainId,
+          txHash: receipt.transactionHash,
+          payload: {
+            productId: String(product._id),
+            targetUserId: String(recipient._id),
+            targetWallet: recipient.walletAddress,
+            currentStatus: chainState.status,
+            careRequested: careRequest,
+            event: {
+              eventType: 'handover',
+              status: chainState.status,
+              actorId: String(req.user._id),
+              actorWallet: req.user.walletAddress,
+              dataHash: product.dataHash,
+              details: {
+                from: String(req.user._id),
+                to: String(recipient._id),
+                recipientWallet: recipient.walletAddress,
+                care: careRequest
+              }
+            }
+          }
+        });
+      }
+    }
+    const handoverDetails = {
+      from: String(req.user._id),
+      to: String(recipient._id),
+      recipientWallet: recipient.walletAddress,
+      ...(careAttestation ? { care: careAttestation } : {})
+    };
     try {
       await updateProduct(product._id, {
         $set: {
@@ -482,7 +608,7 @@ router.post('/:id/handover', protect, validateRequest({
         actorWallet: req.user.walletAddress,
         dataHash: product.dataHash,
         txHash: receipt.transactionHash,
-        details: { from: String(req.user._id), to: String(recipient._id), recipientWallet: recipient.walletAddress }
+        details: handoverDetails
       });
     } catch (databaseError) {
       return handlePendingSync(res, {
@@ -494,13 +620,14 @@ router.post('/:id/handover', protect, validateRequest({
           targetUserId: String(recipient._id),
           targetWallet: recipient.walletAddress,
           currentStatus: chainState.status,
+          ...(careRequest ? { careRequested: careRequest } : {}),
           event: {
             eventType: 'handover',
             status: chainState.status,
             actorId: String(req.user._id),
             actorWallet: req.user.walletAddress,
             dataHash: product.dataHash,
-            details: { from: String(req.user._id), to: String(recipient._id), recipientWallet: recipient.walletAddress }
+            details: handoverDetails
           }
         }
       });
@@ -509,6 +636,7 @@ router.post('/:id/handover', protect, validateRequest({
       message: 'Product handed over successfully',
       blockchainId: product.blockchainId,
       currentOwner: { _id: recipient._id, name: recipient.name, role: recipient.role },
+      ...(careAttestation ? { careAttestation } : {}),
       txHash: receipt.transactionHash
     });
   } catch (error) {
