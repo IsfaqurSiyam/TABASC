@@ -287,6 +287,23 @@ contract('TABASC contracts', (accounts) => {
     assert.equal((await reputation.getHistory(farmer)).length, 0);
   });
 
+  it('scores worse feedback lower while preserving raw complaint values', async () => {
+    const scores = [];
+    for (const [complaint, satisfaction] of [[0, 10000], [9000, 1000]]) {
+      const id = await registerProduct(1000);
+      await prepareDelivery(id, 20);
+      await sellProduct(id);
+      await reputation.recordInspection(id, 10000, 10000, { from: inspector });
+      await reputation.submitFeedback(id, complaint, satisfaction, { from: buyer });
+      const result = await reputation.finalizeScore(id, farmer, { from: inspector });
+      const finalized = result.logs.find((log) => log.event === 'ReputationFinalized');
+      scores.push(Number(finalized.args.batchScore));
+    }
+    assert.deepEqual(scores, [10000, 7300]);
+    const feedback = await reputation.getFeedback(2);
+    assert.equal(feedback.complaint.toString(), '9000');
+  });
+
   it('requires an inspection and participant status before one-time finalization', async () => {
     const id = await registerProduct();
     await expectRevert(reputation.finalizeScore(id, farmer, { from: inspector }));

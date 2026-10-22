@@ -185,7 +185,7 @@ contract ReputationContract {
         bool[5] memory available = [true, hasDelivery, feedback.exists, true, feedback.exists];
         values[0] = inspection.quality;
         values[1] = hasDelivery ? deliveryScoreOf(productId) : 0;
-        values[2] = feedback.exists ? feedback.complaint : 0;
+        values[2] = feedback.exists ? 10000 - feedback.complaint : 0;
         values[3] = inspection.compliance;
         values[4] = feedback.exists ? feedback.satisfaction : 0;
         uint256 batchScore = combine(values, _weights, available);
