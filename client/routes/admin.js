@@ -7,6 +7,7 @@ const PendingSync = require('../models/PendingSync');
 const ReconcileRun = require('../models/ReconcileRun');
 const { protect } = require('./auth');
 const config = require('../config/env');
+const { fundWallet } = require('../blockchain/wallets');
 const {
   RoleRegistryContract,
   ProductContract,
@@ -221,6 +222,11 @@ router.patch('/users/:id/active', validateRequest({
     if (target.role === 'admin' && !req.body.isActive) {
       throw new AppError(400, 'ADMIN_DEACTIVATION_BLOCKED', 'An admin account cannot be deactivated here');
     }
+    let fundingTxHash = null;
+    if (req.body.isActive && target.approvalStatus !== 'approved') {
+      const fundingReceipt = await fundWallet(target.walletAddress);
+      fundingTxHash = fundingReceipt.transactionHash;
+    }
     if (!req.body.isActive) {
       await assertNoActiveCustody(
         target.walletAddress,
@@ -242,7 +248,8 @@ router.patch('/users/:id/active', validateRequest({
     return res.json({
       userId: target._id,
       isActive: target.isActive,
-      approvalStatus: target.approvalStatus || 'approved'
+      approvalStatus: target.approvalStatus || 'approved',
+      fundingTxHash
     });
   } catch (error) {
     return next(error);

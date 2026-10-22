@@ -57,15 +57,12 @@ const fundWallet = async (address, amountEth = config.fundAmountEth) => {
   }));
 };
 
-const createWallet = async (passphrase = config.walletPassphrase, amountEth = config.fundAmountEth) => {
+const createWallet = async (passphrase = config.walletPassphrase) => {
   const account = web3.eth.accounts.create();
   const keystore = await web3.eth.accounts.encrypt(account.privateKey, passphrase);
-  const fundingReceipt = await fundWallet(account.address, amountEth);
-
   return {
     address: account.address,
-    keystore,
-    fundingReceipt
+    keystore
   };
 };
 

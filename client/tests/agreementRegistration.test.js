@@ -22,6 +22,7 @@ const {
 } = require('../policies/stakeholderAgreement');
 
 const createdUsers = [];
+const fundedWallets = [];
 const administrator = {
   _id: '64b000000000000000000001',
   role: 'admin',
@@ -33,6 +34,8 @@ const pendingAccount = {
   role: 'consumer',
   approvalStatus: 'pending',
   isActive: false,
+  walletAddress: '0x2345678901234567890123456789012345678901',
+  walletKeystore: {},
   save: async () => {}
 };
 const UserStub = {
@@ -68,12 +71,17 @@ const mockModule = (filename, exports) => {
 };
 
 mockModule(require.resolve('../models/User'), UserStub);
+let walletFundingCalls = 0;
 mockModule(require.resolve('../blockchain/wallets'), {
   createWallet: async () => ({
     address: '0x1234567890123456789012345678901234567890',
-    keystore: {},
-    fundingReceipt: { transactionHash: '0xtransaction' }
-  })
+    keystore: {}
+  }),
+  fundWallet: async (address) => {
+    walletFundingCalls += 1;
+    fundedWallets.push(address);
+    return { transactionHash: '0xfunding' };
+  }
 });
 mockModule(require.resolve('../models/AuditLog'), {
   create: async () => ({})
@@ -82,7 +90,9 @@ mockModule(require.resolve('../blockchain/web3'), {
   RoleRegistryContract: {
     methods: { isAdmin: () => ({ call: async () => true }) }
   },
-  ProductContract: {},
+  ProductContract: {
+    methods: { productCount: () => ({ call: async () => '0' }) }
+  },
   ReputationContract: {},
   TrackingContract: {},
   getAccounts: async () => [administrator.walletAddress],
@@ -140,6 +150,8 @@ test('registration requires explicit acceptance of the current agreement version
     assert.equal(approved.status, 200);
     assert.equal(pendingAccount.approvalStatus, 'approved');
     assert.equal(pendingAccount.isActive, true);
+    assert.equal((await approved.json()).fundingTxHash, '0xfunding');
+    assert.equal(walletFundingCalls, 1);
 
     const deactivated = await fetch(url, {
       method: 'PATCH',
@@ -157,6 +169,7 @@ test('registration requires explicit acceptance of the current agreement version
     });
     assert.equal(reactivated.status, 200);
     assert.equal(pendingAccount.isActive, true);
+    assert.equal(walletFundingCalls, 1);
   });
   assert.equal(missingAcceptance.status, 400);
   assert.equal(createdUsers.length, 0);
@@ -189,11 +202,13 @@ test('registration requires explicit acceptance of the current agreement version
   assert.equal(acceptedBody.agreementVersion, AGREEMENT_VERSION);
   assert.equal(acceptedBody.approvalStatus, 'pending');
   assert.equal(acceptedBody.pendingApproval, true);
+  assert.equal(acceptedBody.fundingTxHash, undefined);
   assert.equal(acceptedBody.token, undefined);
   assert.equal(createdUsers.length, 1);
   assert.equal(createdUsers[0].agreementHash, AGREEMENT_HASH);
   assert.ok(createdUsers[0].agreementAcceptedAt instanceof Date);
   assert.equal(createdUsers[0].isActive, false);
+  assert.equal(fundedWallets.includes(createdUsers[0].walletAddress), false);
 
   const login = (password) => fetch(`${baseUrl}/login`, {
     method: 'POST',
