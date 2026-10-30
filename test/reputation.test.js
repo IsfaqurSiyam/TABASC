@@ -702,18 +702,6 @@ contract('TABASC contracts', (accounts) => {
     await reputation.setSuspended(distributor, false, { from: admin });
     await tracking.handover(blockedId, distributor, { from: farmer });
 
-    for (let index = 0; index < 3; index++) {
-      const productId = await registerProduct();
-      await prepareDelivery(productId, 20);
-      await sellProduct(productId, buyer);
-      await reputation.recordInspection(productId, 0, 0, { from: inspector });
-      await reputation.submitFeedback(productId, 10000, 0, { from: buyer });
-      await reputation.finalizeScore(productId, distributor, { from: inspector });
-    }
-    assert.equal(await reputation.isRestricted(distributor), true);
-    const restrictedProduct = await registerProduct();
-    await expectRevert(tracking.handover(restrictedProduct, distributor, { from: farmer }));
-
     const penaltyTarget = await registerProduct();
     await prepareDelivery(penaltyTarget, 20);
     await sellProduct(penaltyTarget, buyer);
@@ -726,6 +714,53 @@ contract('TABASC contracts', (accounts) => {
     const penaltyResult = await reputation.getReputation(distributor);
     assert.equal(penaltyResult.scoreBps.toString(), '0');
     assert.equal((await reputation.getHistory(distributor)).length > 0, true);
+
+    const criticalThreshold = Number((await reputation.thresholds())[0]);
+    for (let index = 0; index < 3; index++) {
+      const productId = await registerProduct();
+      await prepareDelivery(productId, 150);
+      await sellProduct(productId, buyer);
+      await reputation.recordInspection(productId, 0, 0, { from: inspector });
+      await reputation.submitFeedback(productId, 10000, 0, { from: buyer });
+      const result = await reputation.finalizeScore(productId, distributor, { from: inspector });
+      const score = await reputation.getReputation(distributor);
+      const batchScore = Number(
+        result.logs.find((log) => log.event === 'ReputationFinalized').args.batchScore
+      );
+      console.log(
+        `Restriction setup batch ${index + 1}: buyer ${buyer}, complaint 10/10, satisfaction 0/10, score ${score.scoreBps} bps`
+      );
+      assert(Number(score.scoreBps) < criticalThreshold);
+      assert(batchScore < criticalThreshold);
+    }
+    assert.equal(await reputation.isRestricted(distributor), true);
+    const restrictedProduct = await registerProduct();
+    await expectRevert(tracking.handover(restrictedProduct, distributor, { from: farmer }));
+  });
+
+  it('does not restrict at the critical threshold but does restrict just below it after three batches', async () => {
+    const criticalThreshold = Number((await reputation.thresholds())[0]);
+    await reputation.setWeights(10000, 0, 0, 0, 0, { from: admin });
+    await reputation.setAlpha(10000, { from: admin });
+
+    for (const [stakeholder, quality] of [
+      [farmer, criticalThreshold],
+      [distributor, criticalThreshold - 1]
+    ]) {
+      for (let index = 0; index < 3; index++) {
+        const productId = await registerProduct();
+        await prepareDelivery(productId, 20);
+        await sellProduct(productId, buyer);
+        await reputation.recordInspection(productId, quality, 0, { from: inspector });
+        await reputation.submitFeedback(productId, 0, 10000, { from: buyer });
+        await reputation.finalizeScore(productId, stakeholder, { from: inspector });
+      }
+    }
+
+    assert.equal((await reputation.getReputation(farmer)).scoreBps.toString(), String(criticalThreshold));
+    assert.equal(await reputation.isRestricted(farmer), false);
+    assert.equal((await reputation.getReputation(distributor)).scoreBps.toString(), String(criticalThreshold - 1));
+    assert.equal(await reputation.isRestricted(distributor), true);
   });
 
   it('allows a single admin setReputation and preserves the old no-reputation behavior', async () => {
