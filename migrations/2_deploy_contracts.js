@@ -14,10 +14,11 @@ module.exports = async function (deployer) {
   const tracking = await TrackingContract.deployed();
   await product.setTrackingContract(tracking.address);
 
-  await deployer.deploy(
+  const reputation = await deployer.deploy(
     ReputationContract,
     registry.address,
     product.address,
     tracking.address
   );
+  await tracking.setReputation(reputation.address);
 };

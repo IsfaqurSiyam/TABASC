@@ -1,0 +1,44 @@
+$kind: http-request
+name: Health Check
+order: 1000
+url: '{{base_url}}/api/health'
+method: GET
+scripts:
+  - type: beforeRequest
+    language: text/javascript
+    code: |-
+      // Record start time for throughput calculation
+      pm.globals.set("reqStart_" + pm.info.requestId, Date.now());
+      
+      // Track request count for throughput
+      const count = pm.globals.get("health_count") || 0;
+      pm.globals.set("health_count", parseInt(count) + 1);
+      
+      if (!pm.globals.get("health_window_start")) {
+          pm.globals.set("health_window_start", Date.now());
+      }
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      const responseTime = pm.response.responseTime;
+      const windowStart = pm.globals.get("health_window_start");
+      const count = pm.globals.get("health_count") || 1;
+      const elapsedSec = (Date.now() - windowStart) / 1000;
+      const throughput = elapsedSec > 0 ? (count / elapsedSec).toFixed(2) : "N/A";
+      
+      // Store results for visualization
+      let results = JSON.parse(pm.globals.get("throughput_results") || "[]");
+      results.push({
+          endpoint: "Health Check",
+          responseTime: responseTime,
+          status: pm.response.code,
+          timestamp: Date.now()
+      });
+      pm.globals.set("throughput_results", JSON.stringify(results));
+      
+      pm.test("Health check OK", () => pm.response.to.have.status(200));
+      pm.test(`Response time < 200ms (got ${responseTime}ms)`, () => {
+          pm.expect(responseTime).to.be.below(200);
+      });
+      
+      console.log(`[Health] Response: ${responseTime}ms | Throughput: ${throughput} req/s`);

@@ -83,6 +83,7 @@ contract('TABASC contracts', (accounts) => {
     await update(productId, 5, retailer, 'Shop');
     if (recordedBuyer) {
       await tracking.recordBuyer(productId, recordedBuyer, { from: retailer });
+      await tracking.confirmBuyer(productId, { from: recordedBuyer });
     }
   }
 
@@ -346,7 +347,14 @@ contract('TABASC contracts', (accounts) => {
     await sellProduct(id, null);
     await expectRevert(tracking.recordBuyer(id, buyer, { from: distributor }));
     await tracking.recordBuyer(id, buyer, { from: retailer });
+    assert.equal(await tracking.proposedBuyerOf(id), buyer);
+    assert.equal(await tracking.isBuyerConfirmed(id), false);
+    await expectRevert(tracking.buyerOf(id));
+    await expectRevert(tracking.confirmBuyer(id, { from: otherBuyer }));
+    await tracking.confirmBuyer(id, { from: buyer });
     assert.equal(await tracking.buyerOf(id), buyer);
+    assert.equal(await tracking.isBuyerConfirmed(id), true);
+    await expectRevert(tracking.confirmBuyer(id, { from: buyer }));
     await expectRevert(tracking.recordBuyer(id, otherBuyer, { from: retailer }));
     await expectRevert(tracking.recordBuyer(id, retailer, { from: retailer }));
     await expectRevert(tracking.recordBuyer(id, '0x0000000000000000000000000000000000000000', { from: retailer }));
@@ -369,8 +377,9 @@ contract('TABASC contracts', (accounts) => {
     const buyerProductId = await registerProduct();
     await prepareDelivery(buyerProductId, 20);
     await sellProduct(buyerProductId, null);
+    await tracking.recordBuyer(buyerProductId, buyer, { from: retailer });
     await tracking.recall(buyerProductId, 'Safety issue', { from: inspector });
-    await expectRevert(tracking.recordBuyer(buyerProductId, buyer, { from: retailer }));
+    await expectRevert(tracking.confirmBuyer(buyerProductId, { from: buyer }));
 
     const feedbackProductId = await registerProduct();
     await prepareDelivery(feedbackProductId, 20);
@@ -512,6 +521,51 @@ contract('TABASC contracts', (accounts) => {
     assert.equal((await reputation.getReputation(farmer)).batches.toString(), '3');
   });
 
+  it('versions scoring configuration without changing finalized scores or labels retroactively', async () => {
+    for (let index = 0; index < 3; index++) {
+      const id = await registerProduct(1000);
+      await prepareDelivery(id, 20);
+      await sellProduct(id);
+      await reputation.recordInspection(id, 8500, 8500, { from: inspector });
+      await reputation.submitFeedback(id, 0, 10000, { from: buyer });
+      await reputation.finalizeScore(id, farmer, { from: inspector });
+    }
+
+    const scoreBeforeChange = await reputation.getReputation(farmer);
+    const historyBeforeChange = await reputation.getHistory(farmer);
+    assert.equal(scoreBeforeChange.scoreBps.toString(), '9325');
+    assert.equal(await reputation.getTrustLevel(farmer), 'Excellent');
+    assert.deepEqual(historyBeforeChange.map((entry) => entry.configVersion.toString()), ['1', '1', '1']);
+
+    await reputation.setThresholds(1000, 3000, 6000, 10000, { from: admin });
+    assert.equal((await reputation.configVersion()).toString(), '2');
+    const oldConfig = await reputation.getConfigSnapshot(1);
+    const oldWeights = oldConfig.weights || oldConfig[0];
+    const oldAlpha = oldConfig.alpha || oldConfig[1];
+    const oldThresholds = oldConfig.thresholds || oldConfig[2];
+    assert.deepEqual(oldWeights.map(Number), [3000, 2500, 2000, 1500, 1000]);
+    assert.equal(oldAlpha.toString(), '3000');
+    assert.deepEqual(oldThresholds.map(Number), [2000, 4000, 6000, 8000]);
+    assert.equal(await reputation.trustLevelForScoreAtVersion(9325, 1), 'Excellent');
+    assert.equal(await reputation.trustLevelForScoreAtVersion(9325, 2), 'Good');
+    assert.equal(await reputation.getTrustLevel(farmer), 'Excellent');
+    assert.equal((await reputation.getReputation(farmer)).scoreBps.toString(), '9325');
+
+    const next = await registerProduct(1000);
+    await prepareDelivery(next, 20);
+    await sellProduct(next);
+    await reputation.recordInspection(next, 8500, 8500, { from: inspector });
+    await reputation.submitFeedback(next, 0, 10000, { from: buyer });
+    const receipt = await reputation.finalizeScore(next, farmer, { from: inspector });
+    const historyAfterChange = await reputation.getHistory(farmer);
+    assert.equal(historyAfterChange[3].configVersion.toString(), '2');
+    assert.equal(
+      receipt.logs.find((log) => log.event === 'ReputationFinalized').args.configVersion.toString(),
+      '2'
+    );
+    assert.equal(await reputation.getTrustLevel(farmer), 'Good');
+  });
+
   it('finalizes one inspection for each actual journey participant', async () => {
     const id = await registerProduct();
     await prepareDelivery(id, 20);
@@ -630,5 +684,59 @@ contract('TABASC contracts', (accounts) => {
     await expectRevert(
       reputation.combine([0, 0, 0, 0, 0], [0, 0, 0, 0, 0], [false, false, false, false, false])
     );
+  });
+
+  it('restricts recipients based on trust thresholds and admin suspension, and applies penalties only in recall cases', async () => {
+    const first = await registerProduct();
+    await tracking.setReputation(reputation.address, { from: admin });
+    await tracking.handover(first, distributor, { from: farmer });
+    await expectRevert(tracking.handover(first, distributor, { from: farmer }));
+
+    const unrestrictedId = await registerProduct();
+    await tracking.handover(unrestrictedId, distributor, { from: farmer });
+    assert.equal(await reputation.isRestricted(distributor), false);
+
+    await reputation.setSuspended(distributor, true, { from: admin });
+    const blockedId = await registerProduct();
+    await expectRevert(tracking.handover(blockedId, distributor, { from: farmer }));
+    await reputation.setSuspended(distributor, false, { from: admin });
+    await tracking.handover(blockedId, distributor, { from: farmer });
+
+    for (let index = 0; index < 3; index++) {
+      const productId = await registerProduct();
+      await prepareDelivery(productId, 20);
+      await sellProduct(productId, buyer);
+      await reputation.recordInspection(productId, 0, 0, { from: inspector });
+      await reputation.submitFeedback(productId, 10000, 0, { from: buyer });
+      await reputation.finalizeScore(productId, distributor, { from: inspector });
+    }
+    assert.equal(await reputation.isRestricted(distributor), true);
+    const restrictedProduct = await registerProduct();
+    await expectRevert(tracking.handover(restrictedProduct, distributor, { from: farmer }));
+
+    const penaltyTarget = await registerProduct();
+    await prepareDelivery(penaltyTarget, 20);
+    await sellProduct(penaltyTarget, buyer);
+    await expectRevert(reputation.applyPenalty(penaltyTarget, distributor, 500, 'Unsafe handling', { from: outsider }));
+    await expectRevert(reputation.applyPenalty(penaltyTarget, outsider, 500, 'Unsafe handling', { from: inspector }));
+    await expectRevert(reputation.applyPenalty(penaltyTarget, distributor, 500, 'Unsafe handling', { from: inspector }));
+    await tracking.recall(penaltyTarget, 'Unsafe handling', { from: inspector });
+    await reputation.applyPenalty(penaltyTarget, distributor, 500, 'Unsafe handling', { from: inspector });
+    await expectRevert(reputation.applyPenalty(penaltyTarget, distributor, 500, 'Unsafe handling', { from: inspector }));
+    const penaltyResult = await reputation.getReputation(distributor);
+    assert.equal(penaltyResult.scoreBps.toString(), '0');
+    assert.equal((await reputation.getHistory(distributor)).length > 0, true);
+  });
+
+  it('allows a single admin setReputation and preserves the old no-reputation behavior', async () => {
+    assert.equal(await tracking.reputationContract(), `0x${'0'.repeat(40)}`);
+    await expectRevert(tracking.setReputation(reputation.address, { from: outsider }));
+    await expectRevert(tracking.setReputation(`0x${'0'.repeat(40)}`, { from: admin }));
+    await tracking.setReputation(reputation.address, { from: admin });
+    await expectRevert(tracking.setReputation(reputation.address, { from: admin }));
+
+    const id = await registerProduct();
+    await tracking.handover(id, distributor, { from: farmer });
+    assert.equal(await product.custodianOf(id), distributor);
   });
 });

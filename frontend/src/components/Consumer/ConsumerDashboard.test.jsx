@@ -68,6 +68,27 @@ test('explains ineligibility without offering a feedback transaction', async () 
   expect(screen.queryByRole('button', { name: 'Submit Feedback' })).not.toBeInTheDocument();
 });
 
+test('lets the selected consumer confirm the purchase before feedback', async () => {
+  await searchForBatch({
+    canSubmit: false,
+    canConfirmBuyer: true,
+    reason: 'Confirm the retailer’s buyer assignment before submitting feedback.'
+  });
+  axios.post.mockResolvedValue({
+    data: { message: 'Buyer assignment confirmed' }
+  });
+  axios.get.mockResolvedValue({
+    data: { canSubmit: true, canConfirmBuyer: false, reason: null }
+  });
+
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm this purchase' }));
+
+  await waitFor(() => expect(axios.post).toHaveBeenCalledWith(
+    `${API_URL}/tracking/${product._id}/buyer/confirm`
+  ));
+  expect(await screen.findByRole('button', { name: 'Submit Feedback' })).toBeEnabled();
+});
+
 test('shows the actual feedback transaction result without inventing a score', async () => {
   await searchForBatch();
   axios.post.mockResolvedValue({

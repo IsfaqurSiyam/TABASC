@@ -7,6 +7,8 @@ const PendingSyncSchema = new mongoose.Schema({
       'product_registered',
       'shipment_updated',
       'custody_transferred',
+      'buyer_proposed',
+      'buyer_confirmed',
       'buyer_recorded',
       'product_recalled',
       'inspection_recorded',

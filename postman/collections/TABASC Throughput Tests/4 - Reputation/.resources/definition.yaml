@@ -1,0 +1,4 @@
+$kind: collection
+name: '4 - Reputation'
+description: 'Reputation score queries - combined DB + blockchain reads.'
+order: 5000

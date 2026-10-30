@@ -18,7 +18,7 @@ const {
 } = require('../blockchain/web3');
 const { assertChainRole } = require('../services/roleAuthorization');
 const {
-  getFinalizedBatchScore,
+  getFinalizedBatchDetails,
   saveBatchReputationScore
 } = require('../services/reputationScores');
 const {
@@ -239,13 +239,14 @@ router.post('/score', protect, validateRequest({
     const scoreBps = asNumber(reputation, 'scoreBps', 0);
     const finalScore = Math.round(scoreBps / 10);
     const totalBatches = asNumber(reputation, 'batches', 1);
-    const batchScoreBps = getFinalizedBatchScore(
+    const finalizedBatch = getFinalizedBatchDetails(
       receipt,
       product.blockchainId,
       req.body.stakeholderWallet
     );
+    const batchScoreBps = finalizedBatch.scoreBps;
     const batchTrustLevel = await ReputationContract.methods
-      .trustLevelForScore(batchScoreBps)
+      .trustLevelForScoreAtVersion(batchScoreBps, finalizedBatch.configVersion)
       .call();
     const batchScore = {
       batchId: product.batchId,
@@ -255,6 +256,7 @@ router.post('/score', protect, validateRequest({
       finalScore: Math.round(batchScoreBps / 10),
       trustLevel: batchTrustLevel,
       totalBatches,
+      configVersion: finalizedBatch.configVersion,
       transactionHash: receipt.transactionHash,
       finalizedAt: new Date()
     };
@@ -273,7 +275,8 @@ router.post('/score', protect, validateRequest({
           totalBatches,
           trustLevel,
           batchScoreBps,
-          batchTrustLevel
+          batchTrustLevel,
+          configVersion: finalizedBatch.configVersion
         }
       });
     }
@@ -294,6 +297,7 @@ router.post('/score', protect, validateRequest({
       scoreBps,
       batchScore: batchScore.finalScore,
       batchScoreBps,
+      configVersion: finalizedBatch.configVersion,
       totalBatches,
       trustLevel,
       inspectionTxHash,
@@ -334,6 +338,12 @@ router.post('/reviews', protect, validateRequest({
     try {
       buyer = await TrackingContract.methods.buyerOf(product.blockchainId).call();
     } catch {
+      const proposedBuyer = await TrackingContract.methods
+        .proposedBuyerOf(product.blockchainId)
+        .call();
+      if (proposedBuyer.toLowerCase() === req.user.walletAddress.toLowerCase()) {
+        throw new AppError(409, 'BUYER_CONFIRMATION_REQUIRED', 'Confirm the retailer’s buyer assignment before submitting feedback');
+      }
       throw new AppError(409, 'BUYER_NOT_RECORDED', 'The retailer has not recorded a buyer for this product');
     }
     if (buyer.toLowerCase() !== req.user.walletAddress.toLowerCase()) {
@@ -437,6 +447,7 @@ router.get('/feedback/:batchId', protect, async (req, res, next) => {
       ReputationContract.methods.getFeedback(product.blockchainId).call()
     ]);
     let reason = null;
+    let canConfirmBuyer = false;
     if (Number(status) !== 5) {
       reason = 'Feedback is available only after the product is sold.';
     } else if (recalled === true || recalled === 'true') {
@@ -452,13 +463,32 @@ router.get('/feedback/:batchId', protect, async (req, res, next) => {
       try {
         buyer = await TrackingContract.methods.buyerOf(product.blockchainId).call();
       } catch {
-        reason = 'Feedback is unavailable until the retailer records the buyer.';
+        const proposedBuyer = await TrackingContract.methods
+          .proposedBuyerOf(product.blockchainId)
+          .call();
+        if (proposedBuyer.toLowerCase() === req.user.walletAddress.toLowerCase()) {
+          canConfirmBuyer = true;
+          reason = 'Confirm the retailer’s buyer assignment before submitting feedback.';
+        } else if (proposedBuyer !== `0x${'0'.repeat(40)}`) {
+          reason = 'Only the consumer selected by the retailer can confirm this buyer assignment.';
+        } else {
+          reason = 'Feedback is unavailable until the retailer proposes a buyer.';
+        }
       }
       if (buyer && buyer.toLowerCase() !== req.user.walletAddress.toLowerCase()) {
         reason = 'Only the consumer recorded as this product’s buyer can submit feedback.';
       }
     }
-    return res.json({ canSubmit: reason === null, reason });
+    if (reason === null && (status === 5 || status === '5')) {
+      const soldAt = Number(await TrackingContract.methods
+        .actedAtOf(product.blockchainId, 5)
+        .call());
+      const latestBlock = await web3.eth.getBlock('latest');
+      if (Number(latestBlock.timestamp) > soldAt + 14 * 24 * 60 * 60) {
+        reason = 'The 14-day feedback window has closed.';
+      }
+    }
+    return res.json({ canSubmit: reason === null, canConfirmBuyer, reason });
   } catch (error) {
     return next(error);
   }
@@ -482,9 +512,10 @@ router.get('/product/:batchId', async (req, res, next) => {
     const farmerWallet = await ProductContract.methods
       .farmerOf(product.blockchainId)
       .call();
-    const [reputation, trustLevel] = await Promise.all([
+    const [reputation, trustLevel, restricted] = await Promise.all([
       ReputationContract.methods.getReputation(farmerWallet).call(),
-      ReputationContract.methods.getTrustLevel(farmerWallet).call()
+      ReputationContract.methods.getTrustLevel(farmerWallet).call(),
+      ReputationContract.methods.isRestricted(farmerWallet).call()
     ]);
     const scoreBps = asNumber(reputation, 'scoreBps', 0);
     const exists = reputation.exists === true || reputation.exists === 'true' ||
@@ -495,7 +526,8 @@ router.get('/product/:batchId', async (req, res, next) => {
     return res.json({
       finalScore: Math.round(scoreBps / 10),
       trustLevel,
-      totalBatches: asNumber(reputation, 'batches', 1)
+      totalBatches: asNumber(reputation, 'batches', 1),
+      restricted: restricted === true || restricted === 'true'
     });
   } catch (error) {
     return next(error);
@@ -505,7 +537,7 @@ router.get('/product/:batchId', async (req, res, next) => {
 router.get('/leaderboard/top', async (req, res, next) => {
   try {
     const topBatches = await BatchReputationScore.find()
-      .select('batchId blockchainId stakeholderWallet scoreBps finalScore trustLevel transactionHash finalizedAt')
+      .select('batchId blockchainId stakeholderWallet scoreBps finalScore trustLevel totalBatches configVersion transactionHash finalizedAt')
       .sort({ scoreBps: -1, finalizedAt: -1 })
       .limit(10);
     return res.json(topBatches);
@@ -519,10 +551,11 @@ router.get('/:wallet', async (req, res, next) => {
     if (!web3.utils.isAddress(req.params.wallet)) {
       throw new AppError(400, 'INVALID_WALLET', 'Invalid wallet address');
     }
-    const [reputation, trustLevel, history] = await Promise.all([
+    const [reputation, trustLevel, history, restricted] = await Promise.all([
       ReputationContract.methods.getReputation(req.params.wallet).call(),
       ReputationContract.methods.getTrustLevel(req.params.wallet).call(),
-      ReputationContract.methods.getHistory(req.params.wallet).call()
+      ReputationContract.methods.getHistory(req.params.wallet).call(),
+      ReputationContract.methods.isRestricted(req.params.wallet).call()
     ]);
     const scoreBps = asNumber(reputation, 'scoreBps', 0);
     const batches = asNumber(reputation, 'batches', 1);
@@ -538,6 +571,7 @@ router.get('/:wallet', async (req, res, next) => {
 
     return res.json({
       wallet: req.params.wallet,
+      restricted: restricted === true || restricted === 'true',
       scores: {
         quality: null,
         delivery: null,
@@ -558,6 +592,7 @@ router.get('/:wallet', async (req, res, next) => {
           finalScore: Math.round(Number(entry.scoreBps) / 10),
           scoreBps: Number(entry.scoreBps),
           batchId: entry.batchId,
+          configVersion: Number(entry.configVersion),
           timestamp: new Date(Number(entry.timestamp) * 1000).toISOString(),
           scores: batch ? {
             quality: batch.qualityScore,

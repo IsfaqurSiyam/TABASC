@@ -3,7 +3,7 @@ const {
   web3
 } = require('../blockchain/web3');
 
-const getFinalizedBatchScore = (receipt, blockchainId, stakeholderWallet) => {
+const getFinalizedBatchDetails = (receipt, blockchainId, stakeholderWallet) => {
   const eventAbi = ReputationContract.options.jsonInterface.find(
     (item) => item.type === 'event' && item.name === 'ReputationFinalized'
   );
@@ -28,8 +28,14 @@ const getFinalizedBatchScore = (receipt, blockchainId, stakeholderWallet) => {
       values.stakeholder.toLowerCase() !== stakeholderWallet.toLowerCase()) {
     throw new Error('ReputationFinalized event does not match the requested batch and stakeholder');
   }
-  return Number(values.batchScore);
+  return {
+    scoreBps: Number(values.batchScore),
+    configVersion: Number(values.configVersion)
+  };
 };
+
+const getFinalizedBatchScore = (receipt, blockchainId, stakeholderWallet) =>
+  getFinalizedBatchDetails(receipt, blockchainId, stakeholderWallet).scoreBps;
 
 const saveBatchReputationScore = (Score, record) => {
   const stakeholderWallet = record.stakeholderWallet.toLowerCase();
@@ -40,4 +46,8 @@ const saveBatchReputationScore = (Score, record) => {
   );
 };
 
-module.exports = { getFinalizedBatchScore, saveBatchReputationScore };
+module.exports = {
+  getFinalizedBatchDetails,
+  getFinalizedBatchScore,
+  saveBatchReputationScore
+};

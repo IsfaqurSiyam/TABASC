@@ -106,6 +106,7 @@ const reconcilePending = async (pending) => {
         finalScore: Math.round(payload.batchScoreBps / 10),
         trustLevel: payload.batchTrustLevel,
         totalBatches: payload.totalBatches,
+        configVersion: payload.configVersion,
         transactionHash: pending.txHash,
         finalizedAt: pending.createdAt
       });
@@ -180,6 +181,16 @@ const reconcilePending = async (pending) => {
         break;
       case 'buyer_recorded':
         fields = { buyer: payload.buyerId, transactionHash: pending.txHash };
+        break;
+      case 'buyer_proposed':
+        fields = { proposedBuyer: payload.buyerId, transactionHash: pending.txHash };
+        break;
+      case 'buyer_confirmed':
+        fields = {
+          buyer: payload.buyerId,
+          proposedBuyer: null,
+          transactionHash: pending.txHash
+        };
         break;
       case 'product_recalled':
         fields = {

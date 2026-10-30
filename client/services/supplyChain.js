@@ -160,6 +160,8 @@ const serializePublicProduct = (product, extra = {}) => {
   const serialized = serializeProduct(product, extra);
   delete serialized.farmerWallet;
   delete serialized.currentOwner;
+  delete serialized.buyer;
+  delete serialized.proposedBuyer;
   const farmer = product.farmer && typeof product.farmer === 'object'
     ? product.farmer
     : null;

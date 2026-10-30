@@ -10,6 +10,7 @@ function ProductScan() {
   const [history, setHistory] = useState([]);
   const [reputation, setReputation] = useState(null);
   const [careAttestation, setCareAttestation] = useState(null);
+  const [careError, setCareError] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
@@ -30,8 +31,11 @@ function ProductScan() {
             `${API_URL}/tracking/${res.data.blockchainId}/care`
           );
           setCareAttestation(careRes.data.careAttestation);
-        } catch {
+        } catch (careRequestError) {
           setCareAttestation(null);
+          setCareError(
+            careRequestError.response?.data?.message || 'Storage care details could not be loaded'
+          );
         }
 
         if (res.data.batchId) {
@@ -139,6 +143,7 @@ function ProductScan() {
       )}
 
       <StorageCareAttestation care={careAttestation} />
+      {careError && <p className="error-message" role="alert">{careError}</p>}
 
       <div className="public-section">
         <h4 style={{ marginTop: 0 }}>Supply Chain Journey</h4>

@@ -32,10 +32,10 @@ contract artifacts already existed in the working tree.
 | M1.1 | CONFIRMED | Truffle reproduction showed an inspector could finalize a sold product before feedback, then permanently lock out the later review. | Owner selected: require Sold and permit finalization after buyer feedback or after 14 days from Sold. The contract rejects early finalization without feedback and rejects feedback after the window. Truffle tests cover early rejection, immediate finalize after feedback, and timeout finalization. | f317d15 |
 | M1.2 | CONFIRMED | Truffle reproduction successfully finalized a recalled product at 10000. | Fixed by rejecting recalled-product finalization. Included in M1 commit. | 1dad6e9 |
 | M1.3 | CONFIRMED | Truffle reproduction granted farmer+inspector roles to one address; that account inspected and finalized its own batch. | Fixed by rejecting inspection/finalization when the inspector is a supply-chain participant. Included in M1 commit. | 1dad6e9 |
-| M1.4 | CONFIRMED | A new reputation takes the first `batchScore` directly; the default excellent threshold is 8,000, so one strong batch could produce an Excellent label. | Owner selected a three-batch minimum. `getTrustLevel` now returns `Unrated` until three stakeholder batches have been finalized; score values remain visible. | pending |
+| M1.4 | CONFIRMED | A new reputation takes the first `batchScore` directly; the default excellent threshold is 8,000, so one strong batch could produce an Excellent label. | Owner selected a three-batch minimum. `getTrustLevel` now returns `Unrated` until three stakeholder batches have been finalized; score values remain visible. | b392dd6 |
 | M1.5 | CONFIRMED | Truffle reproduction registered a `10^18`-second delivery window successfully. | Fixed by limiting contract values to 365 days in seconds; H2 also enforces the same API range. Included in M1 commit. | 1dad6e9 |
-| M1.6 | CONFIRMED | `recordBuyer` accepts any nonzero address supplied by the retailer; there is no buyer acknowledgment or proof of purchase. | Preserve the current retailer-assigned buyer flow; request owner decision before introducing purchaser consent. | — |
-| M1.7 | CONFIRMED | Admin configuration setters can change weights, alpha and thresholds; finalized scores are stored and are not recomputed. | Preserve existing scores; request owner decision before adding config versioning or recomputation. | — |
+| M1.6 | CONFIRMED | `recordBuyer` accepts any nonzero address supplied by the retailer; there is no buyer acknowledgment or proof of purchase. | Retailers now propose the buyer, who must confirm from their consumer account before feedback is accepted; on-chain tests cover confirmation authorization and one-time confirmation. | implemented |
+| M1.7 | CONFIRMED | Admin configuration setters can change weights, alpha and thresholds; finalized scores are stored and are not recomputed. | Scoring configuration is versioned. Finalizations record the version, and historical scores/trust labels continue to use their original configuration snapshot. | implemented |
 | M2 | CONFIRMED | Public batch serialization included `qrCode`, farmer wallet and populated owner data; `/api/qr/seller/:walletAddress` was anonymous and returned profile fields; public tracking history included on-chain actor wallets. The scan page also used the farmer wallet solely to fetch the public reputation summary. | Fixed by removing QR payloads from all serialized product responses, limiting public product provenance to farmer name/location, restricting seller lookup to the account owner/admin, redacting actor wallets from public tracking history, and replacing the scan page's wallet-based reputation lookup with a product-batch lookup that returns only the score summary. Added a serializer regression test. After fix: contracts 20, backend 19, frontend 11; production build passed. | d5e7907 |
 | M3 | CONFIRMED | Wallet creation and decryption use the configured `WALLET_PASSPHRASE`; Ganache account 0 is derived from the development mnemonic and acts as admin; account registration funded the wallet before approval. | Fixed: registration now creates the encrypted wallet without funding it; first admin activation funds the wallet and returns the funding transaction hash. Deactivation/reactivation does not trigger another funding transfer. Wallet migration still funds only already-active, approved users; pending users are funded on approval. No key-custody redesign. Backend regression covers no registration funding and one-time activation funding. After fix: contracts 20, backend 19, frontend 11; production build passed. | aacd0e3 |
 | M4 | CONFIRMED | `GET /api/tracking/:blockchainId` reads shipment history from `TrackingContract.getHistory` but appends handover, buyer and recall events from MongoDB `TrackingEvent`. The endpoint does not query chain logs for those event types. | Documented the split source of truth and the possibility that public journeys lag or omit events until pending MongoDB synchronization is reconciled. No indexer added. | ebb81f3 |
@@ -141,22 +141,10 @@ Truffle emitted a non-fatal µWS native-binary compatibility warning under the
 installed Node.js version and used its JavaScript fallback for the passing
 contract suite.
 
-## Outstanding verification and owner decisions
+## Owner decisions
 
-- **UNVERIFIED — M5.2:** Verify the rendered list with more than 25 products.
-  This requires an isolated database fixture containing at least 26 products
-  and a browser-capable UI run. The API pagination and client display behavior
-  remain unchanged.
-- **Phase 3 reputation policy:** Decide whether failed care checklist items
-  should affect a distributor's score later; scoring was not changed here.
-- **M1.1:** Decide whether scoring waits for a feedback period/deadline or an
-  explicit close action before finalization.
-- **M1.4:** Decide whether trust labels require a minimum number of finalized
-  batches.
-- **M1.6:** Decide whether retailers may assign buyers without buyer
-  acknowledgment or purchase proof.
-- **M1.7:** Decide whether reputation configuration changes need versioning
-  and whether prior scores should ever be recomputed.
+- **Phase 3 reputation policy — RESOLVED:** Care checklist results remain
+  informational and do not affect distributor reputation scores.
 
 ## Existing-data and deployment effects
 
@@ -165,10 +153,36 @@ contract suite.
 - H3 leaves legacy shared-Batch reputation fields untouched because they do
   not identify the stakeholder and cannot be safely backfilled.
 - Contract changes under M1, L7 and L8 require redeployment. A deployment
-  creates new contract instances and does not copy prior on-chain state; no
-  migration or environment/role synchronization was run in this checkup.
+  creates new contract instances and does not copy prior on-chain state. The
+  2026-10-24 local deployment is recorded below.
 - The Phase 3 care attestation is available only after the updated Tracking
   contract is deployed. Existing products on the previous contract are not
   copied into a new deployment and receive no retroactive attestation.
 - Wallet registration now defers funding until first admin activation;
   existing active wallets were not changed by this flow update.
+
+## Runtime verification — 2026-10-24
+
+| Check | Result |
+|---|---|
+| `npm run contracts:compile --prefix client` | Passed |
+| `npm run contracts:test --prefix client` | 27 passing |
+| `npm test --prefix client` | 28 passing |
+| `npm test --prefix frontend` | 19 passing |
+| `npm run build --prefix frontend` | Passed |
+| API `GET /api/health` | HTTP 200; MongoDB, Ganache and all four deployed contracts healthy; 0 pending syncs |
+| Frontend development server | HTTP 200 on `http://localhost:3000/`; API CORS allows the configured origin |
+| Local contract deployment and address sync | Completed; new instances deployed to the configured development chain |
+| Product history after chain reset | Archived 4 stale products and their related history; 8 user records retained |
+| Role synchronization | Initial sync granted 6 valid roles and reported one active farmer with a missing wallet; after wallet repair, a rerun granted the remaining role successfully |
+
+No previous on-chain product state was migrated. The four displaced MongoDB
+products and their related records remain in `ArchivedProduct`; they are no
+longer active products. The affected farmer account was repaired with a new
+encrypted development wallet, funded, and granted its on-chain role. The
+role-sync script continues valid grants while clearly reporting any accounts
+that still have missing or invalid wallet addresses.
+
+M5.2 is verified by the 26-product dashboard regression, which checks both
+pages and the displayed totals; a separate live-database fixture is not
+required.

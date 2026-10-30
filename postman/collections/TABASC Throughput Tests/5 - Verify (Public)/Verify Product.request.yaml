@@ -1,0 +1,28 @@
+$kind: http-request
+name: Verify Product (Public - No Auth)
+order: 1000
+url: '{{base_url}}/api/verify/{{test_batch_id}}'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      const responseTime = pm.response.responseTime;
+      
+      let results = JSON.parse(pm.globals.get("throughput_results") || "[]");
+      results.push({
+          endpoint: "Verify Product (Public)",
+          responseTime: responseTime,
+          status: pm.response.code,
+          timestamp: Date.now(),
+          type: "public-read"
+      });
+      pm.globals.set("throughput_results", JSON.stringify(results));
+      
+      pm.test("Verify endpoint responds", () => {
+          pm.expect(pm.response.code).to.be.oneOf([200, 404]);
+      });
+      
+      console.log(`[Verify Public] Response: ${responseTime}ms`);

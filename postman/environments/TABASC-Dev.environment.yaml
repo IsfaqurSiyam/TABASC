@@ -1,0 +1,26 @@
+name: TABASC Dev
+values:
+  - key: base_url
+    value: 'http://localhost:5000'
+    enabled: true
+    type: default
+  - key: token
+    value: ''
+    enabled: true
+    type: secret
+  - key: admin_email
+    value: 'admin@tabasc.dev'
+    enabled: true
+    type: default
+  - key: admin_password
+    value: 'Admin1234!'
+    enabled: true
+    type: secret
+  - key: test_email
+    value: 'farmer@tabasc.dev'
+    enabled: true
+    type: default
+  - key: test_password
+    value: 'Farmer1234!'
+    enabled: true
+    type: secret

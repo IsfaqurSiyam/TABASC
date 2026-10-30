@@ -8,6 +8,7 @@ const { protect } = require('./auth');
 const config = require('../config/env');
 const {
   ProductContract,
+  ReputationContract,
   RoleRegistryContract,
   TrackingContract,
   web3,
@@ -163,6 +164,7 @@ const listProducts = async (req, res, next, options = {}) => {
       Product.find(filter)
         .populate('farmer', 'name email location')
         .populate('currentOwner', 'name email role')
+        .populate('proposedBuyer', 'name')
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit),
@@ -534,6 +536,19 @@ router.post('/:id/handover', protect, validateRequest({
       throw new AppError(404, 'RECIPIENT_NOT_FOUND', `An active ${expectedRole} with that email was not found`);
     }
     await assertChainRole(RoleRegistryContract, expectedRole, recipient.walletAddress);
+    const reputationAddress = await TrackingContract.methods.reputationContract().call();
+    if (reputationAddress && reputationAddress !== `0x${'0'.repeat(40)}`) {
+      const restricted = await ReputationContract.methods
+        .isRestricted(recipient.walletAddress)
+        .call();
+      if (restricted === true || restricted === 'true') {
+        throw new AppError(
+          403,
+          'RECIPIENT_RESTRICTED',
+          'This recipient is restricted by the trust system and cannot receive handover'
+        );
+      }
+    }
 
     const method = careRequest
       ? TrackingContract.methods.handoverWithCare(

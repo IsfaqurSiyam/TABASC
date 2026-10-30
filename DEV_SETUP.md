@@ -92,15 +92,22 @@ On-chain text is limited to 120 UTF-8 bytes for product names and locations,
 64 bytes for batch IDs, and 500 bytes for shipment notes and recall reasons.
 Consumer feedback is accepted only from the confirmed buyer of a sold,
 non-recalled product and must be submitted within 14 days after the on-chain
-Sold timestamp. Inspectors can finalize after feedback arrives or after the
-14-day feedback window expires. Stakeholder trust labels remain `Unrated`
-until three finalized batches exist; numeric scores remain visible before that
-evidence threshold. Reputation writes with pending database synchronization
-return `202` and are retried by the same reconciliation command.
+Sold timestamp. Retailers propose the buyer, who must confirm the purchase
+from their consumer account before feedback is accepted. Inspectors can
+finalize after feedback arrives or after the 14-day feedback window expires.
+Stakeholder trust labels remain `Unrated` until three finalized batches exist;
+numeric scores remain visible before that evidence threshold. Each finalized
+reputation score records the scoring-configuration version used; later
+configuration changes do not alter prior scores or trust labels. Reputation
+writes with pending database synchronization return `202` and are retried by
+the same reconciliation command.
 
 Create the first administrator with `npm run seed:admin --prefix client`.
 After a contract redeployment, restore approved on-chain roles with
-`npm run sync:roles --prefix client`.
+`npm run sync:roles --prefix client`. Role sync includes only active,
+non-pending accounts. Accounts with a missing or invalid wallet are reported
+and skipped, and the command exits unsuccessfully until those records are
+repaired.
 
 Public registration creates a consumer account and may include a request for a
 farmer, distributor, retailer, or inspector role. The administrator dashboard

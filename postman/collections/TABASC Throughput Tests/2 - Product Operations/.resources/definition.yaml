@@ -1,0 +1,7 @@
+$kind: collection
+name: '2 - Product Operations'
+description: |-
+  Product registration and retrieval endpoints.
+  These hit BOTH MongoDB AND the Ganache blockchain - expect higher latency.
+  This is the core throughput bottleneck for your thesis analysis.
+order: 3000

@@ -1,0 +1,26 @@
+$kind: http-request
+name: Get Reputation Score
+order: 1000
+url: '{{base_url}}/api/reputation/batch/{{test_batch_id}}'
+method: GET
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      const responseTime = pm.response.responseTime;
+      
+      let results = JSON.parse(pm.globals.get("throughput_results") || "[]");
+      results.push({
+          endpoint: "Get Reputation Score",
+          responseTime: responseTime,
+          status: pm.response.code,
+          timestamp: Date.now(),
+          type: "db-blockchain-read"
+      });
+      pm.globals.set("throughput_results", JSON.stringify(results));
+      
+      pm.test("Reputation endpoint responds", () => {
+          pm.expect(pm.response.code).to.be.oneOf([200, 404]);
+      });
+      
+      console.log(`[Reputation] Response: ${responseTime}ms`);

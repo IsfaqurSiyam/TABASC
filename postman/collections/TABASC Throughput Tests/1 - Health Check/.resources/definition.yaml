@@ -1,0 +1,4 @@
+$kind: collection
+name: '1 - Health Check'
+description: 'Baseline health endpoint - fastest possible response, no DB or blockchain. Use this to measure pure server throughput.'
+order: 2000
