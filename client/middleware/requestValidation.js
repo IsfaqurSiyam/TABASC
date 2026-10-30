@@ -22,6 +22,10 @@ const validateRequest = (schema) => (req, res, next) => {
       if (typeof value === 'string' && rule.minLength && value.length < rule.minLength) {
         return next(new AppError(400, 'VALIDATION_ERROR', `${field} is too short`));
       }
+      if (typeof value === 'string' && rule.maxLength !== undefined &&
+          Buffer.byteLength(value, 'utf8') > rule.maxLength) {
+        return next(new AppError(400, 'VALIDATION_ERROR', `${field} is too long`));
+      }
       if (typeof value === 'number' &&
           ((rule.min !== undefined && value < rule.min) ||
            (rule.max !== undefined && value > rule.max))) {

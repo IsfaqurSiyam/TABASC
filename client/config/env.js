@@ -95,6 +95,18 @@ const validateEnvironment = (environment = process.env) => {
     }
   }
 
+  if (environment.PUBLIC_APP_URL) {
+    try {
+      const publicAppUrl = new URL(environment.PUBLIC_APP_URL);
+      if (!['http:', 'https:'].includes(publicAppUrl.protocol) ||
+          publicAppUrl.origin !== environment.PUBLIC_APP_URL) {
+        errors.push('PUBLIC_APP_URL must be an HTTP or HTTPS origin without a path');
+      }
+    } catch (error) {
+      errors.push('PUBLIC_APP_URL must be a valid origin URL');
+    }
+  }
+
   if (environment.FUND_AMOUNT_ETH &&
       (!Number.isFinite(Number(environment.FUND_AMOUNT_ETH)) ||
        Number(environment.FUND_AMOUNT_ETH) <= 0)) {
@@ -124,6 +136,7 @@ const validateEnvironment = (environment = process.env) => {
     adminEmail: environment.ADMIN_EMAIL,
     adminPassword: environment.ADMIN_PASSWORD,
     corsOrigin: environment.CORS_ORIGIN,
+    publicAppUrl: environment.PUBLIC_APP_URL || environment.CORS_ORIGIN,
     fundAmountEth: environment.FUND_AMOUNT_ETH,
     jwtExpiresIn: environment.JWT_EXPIRES_IN
   });

@@ -11,7 +11,7 @@ vi.mock('../Common/ReputationScanner', () => ({ default: () => null }));
 const product = {
   _id: 'mongo-product-id',
   blockchainId: 17,
-  batchId: 'BATCH-17',
+  batchId: 'BATCH/17',
   name: 'Tomatoes',
   category: 'vegetables',
   currentStatus: 'Sold',
@@ -20,13 +20,13 @@ const product = {
 
 const searchForBatch = async (eligibility = { canSubmit: true, reason: null }) => {
   axios.get.mockImplementation((url) => {
-    if (url.endsWith('/products/batch/BATCH-17')) {
+    if (url.endsWith('/products/batch/BATCH%2F17')) {
       return Promise.resolve({ data: product });
     }
     if (url.endsWith('/tracking/17')) {
       return Promise.resolve({ data: { history: [] } });
     }
-    if (url.endsWith('/reputation/feedback/BATCH-17')) {
+    if (url.endsWith('/reputation/feedback/BATCH%2F17')) {
       return Promise.resolve({ data: eligibility });
     }
     return Promise.reject(new Error(`Unexpected request: ${url}`));
@@ -53,7 +53,7 @@ test('shows feedback submission only when the consumer is eligible', async () =>
   await searchForBatch();
   expect(screen.getByRole('button', { name: 'Submit Feedback' })).toBeEnabled();
   expect(axios.get).toHaveBeenCalledWith(
-    `${API_URL}/reputation/feedback/BATCH-17`
+    `${API_URL}/reputation/feedback/BATCH%2F17`
   );
 });
 

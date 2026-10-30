@@ -13,6 +13,7 @@ const { sendFromWallet } = require('../blockchain/wallets');
 const { AppError } = require('../middleware/errors');
 const { validateRequest } = require('../middleware/requestValidation');
 const { assertChainRole } = require('../services/roleAuthorization');
+const { readCareAttestation } = require('../services/careAttestation');
 const {
   STATUS_LABELS,
   STATUS_MAP,
@@ -72,8 +73,8 @@ router.post('/update', protect, validateRequest({
   body: {
     blockchainId: { required: true, type: 'number', min: 1 },
     status: { required: true, type: 'string', enum: STATUS_LABELS },
-    location: { required: true, type: 'string', minLength: 1 },
-    notes: { type: 'string' }
+    location: { required: true, type: 'string', minLength: 1, maxLength: 120 },
+    notes: { type: 'string', maxLength: 500 }
   }
 }), async (req, res, next) => {
   let receipt;
@@ -326,7 +327,7 @@ router.post('/:id/buyer', protect, validateRequest({
 
 router.post('/:id/recall', protect, validateRequest({
   params: { id: { required: true, type: 'string' } },
-  body: { reason: { required: true, type: 'string', minLength: 1 } }
+  body: { reason: { required: true, type: 'string', minLength: 1, maxLength: 500 } }
 }), async (req, res, next) => {
   try {
     if (req.user.role !== 'inspector') {
@@ -397,6 +398,22 @@ router.post('/:id/recall', protect, validateRequest({
   }
 });
 
+router.get('/:blockchainId/care', async (req, res, next) => {
+  try {
+    const blockchainId = getBlockchainId(req.params.blockchainId);
+    const product = await Product.findOne({ blockchainId, isActive: true });
+    if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
+    const careAttestation = await readCareAttestation(TrackingContract, blockchainId);
+    return res.json({
+      blockchainId,
+      hasAttestation: Boolean(careAttestation),
+      careAttestation
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get('/:blockchainId', async (req, res, next) => {
   try {
     const blockchainId = getBlockchainId(req.params.blockchainId);
@@ -411,11 +428,10 @@ router.get('/:blockchainId', async (req, res, next) => {
       const time = new Date(timestamp * 1000);
       return {
         status: STATUS_LABELS[status],
-        updatedBy: getTupleValue(entry, 'updatedBy', 1),
         location: getTupleValue(entry, 'location', 2),
         notes: getTupleValue(entry, 'notes', 3),
         dataHash: getTupleValue(entry, 'dataHash', 4),
-        timestamp: time.toLocaleString(),
+        timestamp: time.toISOString(),
         time
       };
     });
@@ -425,7 +441,6 @@ router.get('/:blockchainId', async (req, res, next) => {
     }).sort({ time: 1 });
     const additionalEvents = transferEvents.map((event) => ({
       status: event.eventType,
-      updatedBy: event.actorWallet,
       location: event.location,
       notes: event.eventType === 'handover'
         ? `Custody transferred to ${event.details?.recipientWallet || ''}`
@@ -433,7 +448,7 @@ router.get('/:blockchainId', async (req, res, next) => {
           ? event.details?.reason || ''
           : 'Buyer recorded',
       dataHash: event.dataHash,
-      timestamp: event.time.toLocaleString(),
+      timestamp: event.time.toISOString(),
       time: event.time
     }));
     history.push(...additionalEvents);

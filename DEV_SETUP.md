@@ -1,30 +1,51 @@
 # Local development
 
-Use Node.js and MongoDB locally. Start the persistent, deterministic Ganache
-development chain with:
+Use Node.js and MongoDB locally. Install the root Truffle toolchain and the
+application dependencies:
+
+```powershell
+npm ci
+npm ci --prefix client
+npm ci --prefix frontend
+```
+
+The root package declares the Truffle version used for compilation, migrations,
+and contract tests. `npm test --prefix client` compiles contracts first, so a
+fresh clone does not need ignored `build/contracts` artifacts.
+
+Start the persistent, deterministic Ganache development chain with:
 
 ```powershell
 npm run ganache:start --prefix client
 ```
 
 This binds to `127.0.0.1:8545`, uses network ID `5777`, and retains chain data
-in `ganache-data`. The command uses Ganache bundled with Truffle; no additional
-package is required. It uses deterministic development-only accounts. Do not
+in `ganache-data`. It uses deterministic development-only accounts. Do not
 use the development mnemonic or these accounts for real funds.
 
 Copy `.env.example` to `client/.env` and replace the placeholder secrets and
 settings. Backend startup requires a JWT secret and wallet passphrase of at
 least 32 characters, a valid local MongoDB URL, local Ganache URL, a positive
 wallet funding amount, token expiry, and the configured frontend origin.
+Set optional `PUBLIC_APP_URL` to the public frontend origin used when generating
+product QR links; it defaults to `CORS_ORIGIN` for existing installations.
 `ADMIN_EMAIL` and `ADMIN_PASSWORD` are only required when explicitly running
 the administrator-seeding script.
 Before startup, confirm every key in `.env.example` is present in
 `client/.env`. Keep the wallet passphrase consistent with existing encrypted
 wallets; changing it can make those wallets unusable.
 
-After migrating contracts, run `npm run sync:env --prefix client` to update the
-deployed contract addresses in `client/.env`. The script preserves other
-settings and the existing line-ending style.
+After a contract change, redeploy in this order:
+
+```powershell
+npm run contracts:compile --prefix client
+npm run contracts:migrate --prefix client
+npm run sync:env --prefix client
+npm run sync:roles --prefix client
+```
+
+Migration deploys new contract instances; it does not copy prior contract
+state. The environment-sync script preserves other settings and line endings.
 
 Start the backend with `npm start --prefix client` after MongoDB, Ganache, and
 the contracts are available. `GET /api/health` reports database, chain,
@@ -49,9 +70,33 @@ MongoDB write fails, the API records a pending sync and returns `202`; rerun
 reconciliation result and remaining pending-sync count are available from the
 admin overview. Inspector scoring records immutable quality and compliance
 values on-chain, then finalizes a score only for an actual journey participant.
-Consumer feedback is accepted only from the wallet recorded as the buyer of a
-sold, non-recalled product. Reputation writes with pending database
-synchronization return `202` and are retried by the same reconciliation command.
+Public scan pages use `GET /api/products/batch/<batchId>`,
+`GET /api/tracking/<blockchainId>`, and
+`GET /api/reputation/product/<batchId>`; the reputation endpoint returns only
+the farmer's score summary and does not expose their wallet address.
+Distributor-to-retailer custody transfer requires a care attestation:
+`POST /api/products/<productId>/handover` accepts the existing `email` plus
+`care.temperatureMaintained`, `care.packagingIntact`, `care.hygieneMaintained`,
+`care.noDamageOrSpoilage`, and a required `explanation`. A failed checklist
+item requires at least 20 UTF-8 bytes of explanation; explanations are limited
+to 500 bytes. The distributor form's
+`GET /api/products/<productId>/care-preview` reports the on-chain `Delivered`
+timestamp and elapsed storage. `GET /api/tracking/<blockchainId>/care` returns
+the immutable on-chain attestation (or `hasAttestation: false`) with ISO dates.
+Storage starts at the chain's `Delivered` timestamp and ends at the recorded
+distributor-to-retailer handover; the contract computes elapsed seconds and
+whole storage days. The checklist and explanation are self-declared; only the
+duration is verified by chain timestamps. The new contract ABI requires the
+full compile, migration, environment sync, and role sync sequence above.
+On-chain text is limited to 120 UTF-8 bytes for product names and locations,
+64 bytes for batch IDs, and 500 bytes for shipment notes and recall reasons.
+Consumer feedback is accepted only from the confirmed buyer of a sold,
+non-recalled product and must be submitted within 14 days after the on-chain
+Sold timestamp. Inspectors can finalize after feedback arrives or after the
+14-day feedback window expires. Stakeholder trust labels remain `Unrated`
+until three finalized batches exist; numeric scores remain visible before that
+evidence threshold. Reputation writes with pending database synchronization
+return `202` and are retried by the same reconciliation command.
 
 Create the first administrator with `npm run seed:admin --prefix client`.
 After a contract redeployment, restore approved on-chain roles with
@@ -70,7 +115,8 @@ accounts or revoke approved on-chain roles, while only competent authorities
 and courts can decide legal proceedings.
 New registrations are inactive and remain pending until an administrator uses
 “Approve & activate” in the account list. Pending accounts cannot log in and
-receive no login token at registration. Administrators can later deactivate or
+receive no login token at registration. Their encrypted wallets are funded on
+first activation, not at signup. Administrators can later deactivate or
 reactivate approved accounts; pending role requests can be approved only after
 the account itself has been approved.
 Blockchain transactions estimate gas from the requested operation, verify the

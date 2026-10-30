@@ -134,8 +134,7 @@ router.post('/register', registrationSchema, async (req, res, next) => {
       agreementVersion: user.agreementVersion,
       agreementAcceptedAt: user.agreementAcceptedAt,
       walletAddress: user.walletAddress,
-      pendingApproval: true,
-      fundingTxHash: wallet.fundingReceipt.transactionHash
+      pendingApproval: true
     });
   } catch (error) {
     if (error.code === 11000) {

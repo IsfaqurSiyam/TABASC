@@ -25,6 +25,7 @@ const UserSchema = new mongoose.Schema({
   },
   walletAddress: {
     type:   String,
+    lowercase: true,
     unique: true,
     sparse: true
   },

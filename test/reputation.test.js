@@ -12,16 +12,18 @@ contract('TABASC contracts', (accounts) => {
   let batchNumber;
 
   async function expectRevert(action) {
+    let revertError;
     try {
       await action;
-      assert.fail('Expected transaction to revert');
     } catch (error) {
-      assert(
-        error.message.toLowerCase().includes('revert') ||
-          error.message.toLowerCase().includes('custom error'),
-        `Expected a revert, received: ${error.message}`
-      );
+      revertError = error;
     }
+    assert(revertError, 'Expected transaction to revert');
+    assert(
+      revertError.message.toLowerCase().includes('revert') ||
+        revertError.message.toLowerCase().includes('custom error'),
+      `Expected a revert, received: ${revertError.message}`
+    );
   }
 
   async function rpc(method, params = []) {
@@ -76,12 +78,22 @@ contract('TABASC contracts', (accounts) => {
   }
 
   async function sellProduct(productId, recordedBuyer = buyer) {
-    await tracking.handover(productId, retailer, { from: distributor });
+    await recordCare(productId);
     await update(productId, 4, retailer, 'Shop');
     await update(productId, 5, retailer, 'Shop');
     if (recordedBuyer) {
       await tracking.recordBuyer(productId, recordedBuyer, { from: retailer });
     }
+  }
+
+  async function recordCare(productId, flags = [true, true, true, true], explanation = 'Product remained in proper storage conditions.') {
+    return tracking.handoverWithCare(
+      productId,
+      retailer,
+      flags,
+      explanation,
+      { from: distributor }
+    );
   }
 
   beforeEach(async () => {
@@ -149,6 +161,47 @@ contract('TABASC contracts', (accounts) => {
     assert.equal((await product.productCount()).toString(), '1');
   });
 
+  it('rejects product and tracking strings that exceed storage limits', async () => {
+    const id = await registerProduct();
+    const hash = web3.utils.keccak256('oversized');
+    await expectRevert(product.registerProduct(
+      'n'.repeat(121),
+      'LONG-NAME',
+      hash,
+      10,
+      { from: farmer }
+    ));
+    await expectRevert(product.registerProduct(
+      'Product',
+      'b'.repeat(65),
+      hash,
+      10,
+      { from: farmer }
+    ));
+    await tracking.handover(id, distributor, { from: farmer });
+    await expectRevert(tracking.updateShipment(
+      id,
+      1,
+      'l'.repeat(121),
+      '',
+      hash,
+      { from: distributor }
+    ));
+    await expectRevert(tracking.updateShipment(
+      id,
+      1,
+      'Farm',
+      'n'.repeat(501),
+      hash,
+      { from: distributor }
+    ));
+    await expectRevert(tracking.recall(
+      id,
+      'r'.repeat(501),
+      { from: inspector }
+    ));
+  });
+
   it('sets the tracking contract only once and restricts custodian updates to tracking', async () => {
     await expectRevert(product.setTrackingContract(tracking.address, { from: outsider }));
     await expectRevert(product.setTrackingContract('0x0000000000000000000000000000000000000000', { from: admin }));
@@ -174,7 +227,13 @@ contract('TABASC contracts', (accounts) => {
     await update(id, 3, distributor);
     await expectRevert(tracking.handover(id, retailer, { from: outsider }));
     await expectRevert(tracking.handover(id, outsider, { from: distributor }));
-    await tracking.handover(id, retailer, { from: distributor });
+    await expectRevert(tracking.handover(id, retailer, { from: distributor }));
+    await recordCare(id);
+    const attestation = await tracking.getCareAttestation(id);
+    assert.equal(attestation.distributor, distributor);
+    assert.equal(attestation.retailer, retailer);
+    assert.equal(await tracking.hasCareAttestation(id), true);
+    assert.equal(await product.custodianOf(id), retailer);
     await expectRevert(update(id, 4, distributor));
     await update(id, 4, retailer);
     await update(id, 5, retailer);
@@ -207,7 +266,7 @@ contract('TABASC contracts', (accounts) => {
     await update(id, 3, distributor);
     await expectRevert(tracking.handover(id, retailer, { from: distributor }));
     await registry.grantRole(await registry.RETAILER_ROLE(), retailer, { from: admin });
-    await tracking.handover(id, retailer, { from: distributor });
+    await recordCare(id);
     await registry.revokeRole(await registry.RETAILER_ROLE(), retailer, { from: admin });
     await expectRevert(update(id, 4, retailer));
     await registry.grantRole(await registry.RETAILER_ROLE(), retailer, { from: admin });
@@ -216,6 +275,67 @@ contract('TABASC contracts', (accounts) => {
     await expectRevert(tracking.actorOf(0, 0));
     await expectRevert(tracking.actedAtOf(99, 0));
     await expectRevert(tracking.isRecalled(99));
+  });
+
+  it('requires valid distributor care details and records an immutable handover attestation', async () => {
+    const id = await registerProduct();
+    await prepareDelivery(id, 20);
+    await expectRevert(recordCare(id, [false, true, true, true], 'Damaged'));
+    await expectRevert(recordCare(id, [true, true, true, true], ''));
+    await expectRevert(recordCare(id, [true, true, true, true], '   '));
+    await expectRevert(tracking.handoverWithCare(
+      id, retailer, [true, true, true, true], 'Valid storage condition details.',
+      { from: farmer }
+    ));
+    await registry.revokeRole(await registry.DISTRIBUTOR_ROLE(), distributor, { from: admin });
+    await expectRevert(tracking.handoverWithCare(
+      id, retailer, [true, true, true, true], 'Valid storage condition details.',
+      { from: distributor }
+    ));
+    await registry.grantRole(await registry.DISTRIBUTOR_ROLE(), distributor, { from: admin });
+    await expectRevert(tracking.handoverWithCare(
+      id, retailer, [true, true, true, true], 'Valid storage condition details.',
+      { from: outsider }
+    ));
+
+    const tx = await recordCare(id, [false, true, true, true], 'Temperature was above the safe range during storage.');
+    const attestation = await tracking.getCareAttestation(id);
+    assert.equal(attestation.temperatureMaintained, false);
+    assert.equal(attestation.packagingIntact, true);
+    assert.equal(attestation.explanation, 'Temperature was above the safe range during storage.');
+    assert.notEqual(attestation.detailsHash, `0x${'0'.repeat(64)}`);
+    assert.equal(await tracking.hasCareAttestation(id), true);
+    assert.equal(await product.custodianOf(id), retailer);
+    const emitted = tx.logs.find((log) => log.event === 'CareAttestationRecorded').args;
+    assert.equal(emitted.productId.toString(), String(id));
+    assert.equal(emitted.distributor, distributor);
+    assert.equal(emitted.retailer, retailer);
+    assert.equal(emitted.storedSince.toString(), attestation.storedSince.toString());
+    assert.equal(emitted.handedOverAt.toString(), attestation.handedOverAt.toString());
+    assert.equal(emitted.storageDays.toString(), attestation.storageDays.toString());
+    assert.equal(emitted.storageSeconds.toString(), attestation.storageSeconds.toString());
+    assert.equal(emitted.temperatureMaintained, false);
+    assert.equal(emitted.explanation, attestation.explanation);
+    assert.equal(emitted.detailsHash, attestation.detailsHash);
+    await expectRevert(recordCare(id));
+    console.log(`Care attestation transaction gas used: ${tx.receipt.gasUsed}`);
+  });
+
+  it('computes storage duration from Delivered and handover timestamps', async () => {
+    for (const days of [0, 1, 3, 10]) {
+      const id = await registerProduct();
+      await prepareDelivery(id, 20);
+      const storedSince = Number(await tracking.actedAtOf(id, 3));
+      if (days > 0) await rpc('evm_increaseTime', [days * 86400]);
+      await recordCare(id);
+
+      const attestation = await tracking.getCareAttestation(id);
+      const elapsed = Number(attestation.handedOverAt) - storedSince;
+      assert.equal(Number(attestation.storedSince), storedSince);
+      assert.equal(Number(attestation.storageSeconds), elapsed);
+      assert.equal(Number(attestation.storageDays), Math.floor(elapsed / 86400));
+      assert.equal(Number(attestation.storageDays), days);
+    }
   });
 
   it('requires a sold product and its retailer to record a buyer exactly once', async () => {
@@ -245,6 +365,22 @@ contract('TABASC contracts', (accounts) => {
     await expectRevert(tracking.getCurrentStatus(99));
   });
 
+  it('rejects buyer records and feedback for recalled products', async () => {
+    const buyerProductId = await registerProduct();
+    await prepareDelivery(buyerProductId, 20);
+    await sellProduct(buyerProductId, null);
+    await tracking.recall(buyerProductId, 'Safety issue', { from: inspector });
+    await expectRevert(tracking.recordBuyer(buyerProductId, buyer, { from: retailer }));
+
+    const feedbackProductId = await registerProduct();
+    await prepareDelivery(feedbackProductId, 20);
+    await sellProduct(feedbackProductId, buyer);
+    await tracking.recall(feedbackProductId, 'Safety issue', { from: inspector });
+    await expectRevert(
+      reputation.submitFeedback(feedbackProductId, 0, 10000, { from: buyer })
+    );
+  });
+
   it('records an inspector inspection once and rejects invalid scores', async () => {
     const id = await registerProduct();
     await expectRevert(reputation.recordInspection(id, 9000, 9000, { from: outsider }));
@@ -258,6 +394,18 @@ contract('TABASC contracts', (accounts) => {
     assert.equal(result.exists, true);
     await expectRevert(reputation.recordInspection(id, 7000, 7000, { from: inspector }));
     await expectRevert(reputation.recordInspection(99, 7000, 7000, { from: inspector }));
+  });
+
+  it('rejects self-inspection, recalled scoring, and delivery windows over one year', async () => {
+    await expectRevert(registerProduct(10n ** 18n));
+    const id = await registerProduct(365 * 24 * 60 * 60);
+    assert.equal((await product.deliveryWindowOf(id)).toString(), '31536000');
+    await registry.grantRole(await registry.INSPECTOR_ROLE(), farmer, { from: admin });
+    await expectRevert(reputation.recordInspection(id, 10000, 10000, { from: farmer }));
+    await reputation.recordInspection(id, 10000, 10000, { from: inspector });
+    await tracking.recall(id, 'Unsafe product', { from: inspector });
+    await expectRevert(reputation.finalizeScore(id, farmer, { from: inspector }));
+    assert.equal((await reputation.getReputation(farmer)).exists, false);
   });
 
   it('accepts feedback only from the recorded buyer of a sold product', async () => {
@@ -287,17 +435,81 @@ contract('TABASC contracts', (accounts) => {
     assert.equal((await reputation.getHistory(farmer)).length, 0);
   });
 
+  it('waits for buyer feedback or the post-sale feedback window before finalizing', async () => {
+    const id = await registerProduct(1000);
+    await prepareDelivery(id, 20);
+    await sellProduct(id);
+    await reputation.recordInspection(id, 10000, 10000, { from: inspector });
+    await expectRevert(reputation.finalizeScore(id, farmer, { from: inspector }));
+    await reputation.submitFeedback(id, 9000, 1000, { from: buyer });
+    const finalized = await reputation.finalizeScore(id, farmer, { from: inspector });
+    const score = await reputation.getReputation(farmer);
+    assert.equal(finalized.logs.find((log) => log.event === 'ReputationFinalized').args.batchScore.toString(), '7300');
+    assert.equal(score.scoreBps.toString(), '7300');
+  });
+
+  it('allows finalization after 14 days without feedback and rejects late feedback', async () => {
+    const id = await registerProduct(1000);
+    await prepareDelivery(id, 20);
+    await sellProduct(id);
+    await reputation.recordInspection(id, 10000, 10000, { from: inspector });
+    const soldAt = Number(await tracking.actedAtOf(id, 5));
+    await rpc('evm_increaseTime', [14 * 86400 + 1]);
+    await rpc('evm_mine');
+    await reputation.finalizeScore(id, farmer, { from: inspector });
+    const finalizedAt = Number((await web3.eth.getBlock('latest')).timestamp);
+    assert(finalizedAt > soldAt + 14 * 86400);
+    await expectRevert(reputation.submitFeedback(id, 9000, 1000, { from: buyer }));
+  });
+
+  it('scores worse feedback lower while preserving raw complaint values', async () => {
+    const scores = [];
+    for (const [complaint, satisfaction] of [[0, 10000], [9000, 1000]]) {
+      const id = await registerProduct(1000);
+      await prepareDelivery(id, 20);
+      await sellProduct(id);
+      await reputation.recordInspection(id, 10000, 10000, { from: inspector });
+      await reputation.submitFeedback(id, complaint, satisfaction, { from: buyer });
+      const result = await reputation.finalizeScore(id, farmer, { from: inspector });
+      const finalized = result.logs.find((log) => log.event === 'ReputationFinalized');
+      scores.push(Number(finalized.args.batchScore));
+    }
+    assert.deepEqual(scores, [10000, 7300]);
+    const feedback = await reputation.getFeedback(2);
+    assert.equal(feedback.complaint.toString(), '9000');
+  });
+
   it('requires an inspection and participant status before one-time finalization', async () => {
     const id = await registerProduct();
     await expectRevert(reputation.finalizeScore(id, farmer, { from: inspector }));
     await reputation.recordInspection(id, 8000, 6000, { from: inspector });
     await expectRevert(reputation.finalizeScore(id, outsider, { from: inspector }));
     await expectRevert(reputation.finalizeScore(id, farmer, { from: outsider }));
+    await expectRevert(reputation.finalizeScore(id, farmer, { from: inspector }));
+    await prepareDelivery(id, 20);
+    await sellProduct(id);
+    await reputation.submitFeedback(id, 0, 9000, { from: buyer });
     await reputation.finalizeScore(id, farmer, { from: inspector });
     await expectRevert(reputation.finalizeScore(id, farmer, { from: inspector }));
     assert.equal((await reputation.getHistory(farmer)).length, 1);
-    assert.equal(await reputation.getTrustLevel(farmer), 'Good');
+    assert.equal(await reputation.getTrustLevel(farmer), 'Unrated');
     assert.equal(await reputation.getTrustLevel(outsider), 'Unrated');
+  });
+
+  it('withholds stakeholder trust labels until three finalized batches', async () => {
+    for (let index = 1; index <= 3; index++) {
+      const id = await registerProduct(1000);
+      await prepareDelivery(id, 20);
+      await sellProduct(id);
+      await reputation.recordInspection(id, 10000, 10000, { from: inspector });
+      await reputation.submitFeedback(id, 0, 10000, { from: buyer });
+      await reputation.finalizeScore(id, farmer, { from: inspector });
+      assert.equal(
+        await reputation.getTrustLevel(farmer),
+        index === 3 ? 'Excellent' : 'Unrated'
+      );
+    }
+    assert.equal((await reputation.getReputation(farmer)).batches.toString(), '3');
   });
 
   it('finalizes one inspection for each actual journey participant', async () => {
@@ -305,6 +517,7 @@ contract('TABASC contracts', (accounts) => {
     await prepareDelivery(id, 20);
     await sellProduct(id);
     await reputation.recordInspection(id, 8000, 6000, { from: inspector });
+    await reputation.submitFeedback(id, 0, 9000, { from: buyer });
     for (const stakeholder of [farmer, distributor, retailer]) {
       assert.equal(await reputation.isParticipant(id, stakeholder), true);
       await reputation.finalizeScore(id, stakeholder, { from: inspector });
@@ -315,19 +528,25 @@ contract('TABASC contracts', (accounts) => {
   it('accumulates batches with the configured EMA instead of overwriting', async () => {
     const first = await registerProduct();
     await reputation.recordInspection(first, 10000, 10000, { from: inspector });
+    await prepareDelivery(first, 20);
+    await sellProduct(first);
+    await reputation.submitFeedback(first, 0, 10000, { from: buyer });
     await reputation.finalizeScore(first, farmer, { from: inspector });
     const firstScore = await reputation.getReputation(farmer);
     assert.equal(firstScore.scoreBps.toString(), '10000');
 
     const second = await registerProduct();
     await reputation.recordInspection(second, 4000, 4000, { from: inspector });
+    await prepareDelivery(second, 20);
+    await sellProduct(second);
+    await reputation.submitFeedback(second, 10000, 0, { from: buyer });
     await reputation.finalizeScore(second, farmer, { from: inspector });
     const secondScore = await reputation.getReputation(farmer);
-    assert.equal(secondScore.scoreBps.toString(), '8200');
+    assert.equal(secondScore.scoreBps.toString(), '8290');
     assert.equal(secondScore.batches.toString(), '2');
     const history = await reputation.getHistory(farmer);
     assert.equal(history.length, 2);
-    assert.equal(history[1].scoreBps.toString(), '8200');
+    assert.equal(history[1].scoreBps.toString(), '8290');
   });
 
   it('computes delivery scores at 0.5x, 1.5x and 2.5x the delivery window', async () => {

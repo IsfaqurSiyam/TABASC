@@ -9,6 +9,10 @@ interface IProductRoleRegistry {
 /// @title ProductContract
 /// @notice Registers unique batches and tracks their farmer and current custodian.
 contract ProductContract {
+    uint256 private constant MAX_DELIVERY_WINDOW = 365 days;
+    uint256 private constant MAX_NAME_BYTES = 120;
+    uint256 private constant MAX_BATCH_ID_BYTES = 64;
+
     struct Product {
         uint256 id;
         string name;
@@ -32,6 +36,7 @@ contract ProductContract {
     error Unauthorized();
     error InvalidAddress();
     error EmptyField();
+    error FieldTooLong();
     error InvalidDataHash();
     error InvalidDeliveryWindow();
     error DuplicateBatch();
@@ -66,8 +71,14 @@ contract ProductContract {
     ) external returns (uint256 productId) {
         if (!registry.hasRole(registry.FARMER_ROLE(), msg.sender)) revert Unauthorized();
         if (bytes(name).length == 0 || bytes(batchId).length == 0) revert EmptyField();
+        if (
+            bytes(name).length > MAX_NAME_BYTES ||
+            bytes(batchId).length > MAX_BATCH_ID_BYTES
+        ) revert FieldTooLong();
         if (dataHash == bytes32(0)) revert InvalidDataHash();
-        if (deliveryWindow == 0) revert InvalidDeliveryWindow();
+        if (deliveryWindow == 0 || deliveryWindow > MAX_DELIVERY_WINDOW) {
+            revert InvalidDeliveryWindow();
+        }
 
         bytes32 batchKey = keccak256(bytes(batchId));
         if (_productIdByBatch[batchKey] != 0) revert DuplicateBatch();

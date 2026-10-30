@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Batch = require('../models/Batch');
+const BatchReputationScore = require('../models/BatchReputationScore');
 const ConsumerReview = require('../models/ConsumerReview');
 const ArchivedProduct = require('../models/ArchivedProduct');
 const PendingSync = require('../models/PendingSync');
@@ -9,11 +10,21 @@ const TrackingEvent = require('../models/TrackingEvent');
 const config = require('../config/env');
 const connectDB = require('../config/db');
 const { archiveDisplacedProduct, assertProductRegistrationTarget } = require('../services/productRegistrationSync');
-const { web3, ProductContract } = require('../blockchain/web3');
+const { saveBatchReputationScore } = require('../services/reputationScores');
+const { web3, ProductContract, TrackingContract } = require('../blockchain/web3');
+const { readCareAttestation } = require('../services/careAttestation');
 
 const saveTrackingEvent = async (pending, product) => {
   const event = pending.payload.event;
   if (!event) throw new Error(`Pending transaction ${pending.txHash} has no event payload`);
+  let details = event.details || {};
+  if (pending.payload.careRequested) {
+    const careAttestation = await readCareAttestation(TrackingContract, pending.blockchainId);
+    if (!careAttestation) {
+      throw new Error(`Care attestation for product ${pending.blockchainId} is missing on-chain`);
+    }
+    details = { ...details, care: careAttestation };
+  }
   await TrackingEvent.updateOne(
     { txHash: pending.txHash },
     {
@@ -29,7 +40,7 @@ const saveTrackingEvent = async (pending, product) => {
         dataHash: event.dataHash,
         txHash: pending.txHash,
         time: event.time ? new Date(event.time) : new Date(),
-        details: event.details || {}
+        details
       }
     },
     { upsert: true }
@@ -86,18 +97,32 @@ const reconcilePending = async (pending) => {
       throw new Error(`Batch ${payload.batchId} disappeared during feedback reconciliation`);
     }
   } else if (pending.operation === 'reputation_finalized') {
-    const batchUpdate = await Batch.updateOne(
-      { batchId: payload.batchId },
-      {
-        $set: {
-          finalReputationScore: payload.finalScore,
-          trustLevel: payload.trustLevel,
-          reputationTxHash: pending.txHash
+    if (payload.batchScoreBps !== undefined) {
+      await saveBatchReputationScore(BatchReputationScore, {
+        batchId: payload.batchId,
+        blockchainId: pending.blockchainId,
+        stakeholderWallet: payload.stakeholderWallet,
+        scoreBps: payload.batchScoreBps,
+        finalScore: Math.round(payload.batchScoreBps / 10),
+        trustLevel: payload.batchTrustLevel,
+        totalBatches: payload.totalBatches,
+        transactionHash: pending.txHash,
+        finalizedAt: pending.createdAt
+      });
+    } else {
+      const batchUpdate = await Batch.updateOne(
+        { batchId: payload.batchId },
+        {
+          $set: {
+            finalReputationScore: payload.finalScore,
+            trustLevel: payload.trustLevel,
+            reputationTxHash: pending.txHash
+          }
         }
+      );
+      if (batchUpdate.matchedCount !== 1) {
+        throw new Error(`Batch ${payload.batchId} is missing during reputation reconciliation`);
       }
-    );
-    if (batchUpdate.matchedCount !== 1) {
-      throw new Error(`Batch ${payload.batchId} is missing during reputation reconciliation`);
     }
   } else if (pending.operation === 'product_registered') {
     if (!payload.product) {

@@ -110,7 +110,7 @@ function FarmerDashboard() {
         <form id="workspace" onSubmit={handleSubmit} style={{ border: '1px solid #ccc', padding: 16, marginBottom: 24, maxWidth: 500 }}>
           <div style={{ marginBottom: 10 }}>
             <label>Product Name</label><br />
-            <input name="name" value={formData.name} onChange={handleChange} required style={{ width: '100%', padding: 6 }} />
+            <input name="name" value={formData.name} onChange={handleChange} required maxLength={120} style={{ width: '100%', padding: 6 }} />
           </div>
           <div style={{ marginBottom: 10 }}>
             <label>Description</label><br />
@@ -118,7 +118,7 @@ function FarmerDashboard() {
           </div>
           <div style={{ marginBottom: 10 }}>
             <label>Batch ID</label><br />
-            <input name="batchId" value={formData.batchId} onChange={handleChange} required style={{ width: '100%', padding: 6 }} />
+            <input name="batchId" value={formData.batchId} onChange={handleChange} required maxLength={64} style={{ width: '100%', padding: 6 }} />
           </div>
           <div style={{ marginBottom: 10 }}>
             <label>Category</label><br />

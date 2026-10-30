@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const config = require('../config/env');
 const connectDB = require('../config/db');
-const { createWallet } = require('../blockchain/wallets');
+const { createWallet, fundWallet } = require('../blockchain/wallets');
 
 const run = async () => {
   await connectDB(config.mongoUri);
@@ -18,6 +18,9 @@ const run = async () => {
     let migrated = 0;
     for (const user of users) {
       const wallet = await createWallet();
+      const fundingReceipt = user.isActive && user.approvalStatus === 'approved'
+        ? await fundWallet(wallet.address)
+        : null;
       if (user.walletAddress &&
           user.walletAddress.toLowerCase() !== wallet.address.toLowerCase()) {
         user.legacyWallet = user.walletAddress;
@@ -26,6 +29,9 @@ const run = async () => {
       user.walletKeystore = JSON.stringify(wallet.keystore);
       await user.save();
       migrated += 1;
+      if (fundingReceipt) {
+        console.log(`Funded migrated wallet for user ${user._id}: ${fundingReceipt.transactionHash}`);
+      }
     }
     console.log(`Wallet migration completed for ${migrated} users`);
   } finally {

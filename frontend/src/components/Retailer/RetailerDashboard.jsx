@@ -2,10 +2,17 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import ReputationQRCode from '../Common/ReputationQRCode';
 import SupplyChainActions from '../Common/SupplyChainActions';
+import StorageCareAttestation from '../Common/StorageCareAttestation';
+import ProductPagination from '../Common/ProductPagination';
 import { API_URL } from '../../config/api';
+
+const PAGE_SIZE = 25;
 
 function RetailerDashboard() {
   const [products, setProducts] = useState([]);
+  const [page, setPage] = useState(1);
+  const [totalProducts, setTotalProducts] = useState(0);
+  const [listError, setListError] = useState('');
   const [selectedProduct, setSelectedProduct] = useState('');
   const [location, setLocation] = useState('');
   const [notes, setNotes] = useState('');
@@ -18,18 +25,34 @@ function RetailerDashboard() {
   const eligibleProducts = products.filter((product) => !product.isRecalled &&
     !product.expired && ['Delivered', 'OnShelf'].includes(product.currentStatus));
 
-  const fetchProducts = async () => {
+  const fetchProducts = async (requestedPage = page) => {
     try {
-      const res = await axios.get(`${API_URL}/products`);
-      setProducts(res.data);
+      setListError('');
+      const res = await axios.get(
+        `${API_URL}/products?page=${requestedPage}&limit=${PAGE_SIZE}`
+      );
+      const total = Number(res.headers['x-total-count'] || 0);
+      const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      if (requestedPage > lastPage) {
+        setTotalProducts(total);
+        setPage(lastPage);
+        return;
+      }
+      const withCare = await Promise.all(res.data.map(async (product) => {
+        if (product.currentStatus === 'Harvested') return product;
+        const care = await axios.get(`${API_URL}/tracking/${product.blockchainId}/care`);
+        return { ...product, careAttestation: care.data.careAttestation };
+      }));
+      setProducts(withCare);
+      setTotalProducts(total);
     } catch (err) {
-      console.error(err);
+      setListError(err.response?.data?.message || 'Unable to load products');
     }
   };
 
   useEffect(() => {
     fetchProducts();
-  }, []);
+  }, [page]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -66,10 +89,10 @@ function RetailerDashboard() {
         </div>
       </div>
       <div className="kpi-grid">
-        <div className="kpi-card"><strong>{products.length}</strong><span>Available products</span></div>
-        <div className="kpi-card"><strong>{products.filter(p => p.currentStatus === 'Delivered').length}</strong><span>Awaiting shelf placement</span></div>
-        <div className="kpi-card"><strong>{products.filter(p => p.currentStatus === 'OnShelf').length}</strong><span>On shelf</span></div>
-        <div className="kpi-card"><strong>{products.filter(p => p.currentStatus === 'Sold').length}</strong><span>Sold batches</span></div>
+        <div className="kpi-card"><strong>{totalProducts}</strong><span>Available products</span></div>
+        <div className="kpi-card"><strong>{products.filter(p => p.currentStatus === 'Delivered').length}</strong><span>Awaiting shelf placement on this page</span></div>
+        <div className="kpi-card"><strong>{products.filter(p => p.currentStatus === 'OnShelf').length}</strong><span>On shelf on this page</span></div>
+        <div className="kpi-card"><strong>{products.filter(p => p.currentStatus === 'Sold').length}</strong><span>Sold batches on this page</span></div>
       </div>
       <div className="workflow-strip">
         <div className="workflow-step"><b>1</b><div><strong>Confirm receipt</strong><span>Choose the delivered batch arriving at your store.</span></div></div>
@@ -103,13 +126,13 @@ function RetailerDashboard() {
 
         <div style={{ marginBottom: 10 }}>
           <label>Store Location</label><br />
-          <input value={location} onChange={(e) => setLocation(e.target.value)} required
+          <input value={location} onChange={(e) => setLocation(e.target.value)} required maxLength={120}
             style={{ width: '100%', padding: 6 }} placeholder="e.g. Gulshan Fresh Mart" />
         </div>
 
         <div style={{ marginBottom: 10 }}>
           <label>Notes (optional — flag quality issues here)</label><br />
-          <input value={notes} onChange={(e) => setNotes(e.target.value)}
+          <input value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={500}
             style={{ width: '100%', padding: 6 }} placeholder="e.g. minor bruising on 5% of batch" />
         </div>
 
@@ -118,12 +141,17 @@ function RetailerDashboard() {
         </button>
       </form>
 
-      <SupplyChainActions products={products} role="retailer" onComplete={fetchProducts} />
+      <SupplyChainActions products={products} role="retailer" onComplete={() => fetchProducts(page)} />
+
+      {products.filter((product) => product.careAttestation).map((product) => (
+        <StorageCareAttestation key={product._id} care={product.careAttestation} />
+      ))}
 
       <div className="section-heading">
         <h3>All Products</h3>
         <p>Confirm the status of every received batch</p>
       </div>
+      {listError && <p className="error-message" role="alert">{listError}</p>}
       <table id="records" style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ background: '#f0f0f0' }}>
@@ -142,6 +170,12 @@ function RetailerDashboard() {
           ))}
         </tbody>
       </table>
+      <ProductPagination
+        page={page}
+        pageSize={PAGE_SIZE}
+        total={totalProducts}
+        onPageChange={setPage}
+      />
     </div>
   );
 }

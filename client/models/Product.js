@@ -36,7 +36,8 @@ const ProductSchema = new mongoose.Schema({
   farmer: {
     type:     mongoose.Schema.Types.ObjectId,
     ref:      'User',
-    required: true
+    required: true,
+    index:    true
   },
   farmerWallet: {
     type:     String,
@@ -48,12 +49,14 @@ const ProductSchema = new mongoose.Schema({
   },
   currentOwner: {
     type:    mongoose.Schema.Types.ObjectId,
-    ref:     'User'
+    ref:     'User',
+    index:   true
   },
   currentStatus: {
     type:    String,
     enum:    ['Harvested', 'PickedUp', 'InTransit', 'Delivered', 'OnShelf', 'Sold'],
-    default: 'Harvested'
+    default: 'Harvested',
+    index:   true
   },
   deliveryWindow: {
     type: Number,

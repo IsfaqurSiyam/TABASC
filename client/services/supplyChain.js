@@ -20,6 +20,13 @@ const sortKeys = (value) => {
 const canonicalJson = (value) => JSON.stringify(sortKeys(value));
 const hashRecord = (value) => web3.utils.keccak256(canonicalJson(value));
 
+const deliveryWindowDaysToSeconds = (value) => {
+  if (!Number.isInteger(value) || value < 1 || value > 365) {
+    throw new AppError(400, 'INVALID_DELIVERY_WINDOW', 'Delivery window must be from 1 to 365 days');
+  }
+  return value * 24 * 60 * 60;
+};
+
 const canonicalProductFields = (product) => ({
   batchId: String(product.batchId).trim(),
   category: product.category || 'other',
@@ -139,11 +146,28 @@ const isExpired = (expiryDate) => {
   return Date.now() >= expiresAt;
 };
 
-const serializeProduct = (product, extra = {}) => ({
-  ...product.toObject(),
-  expired: isExpired(product.expiryDate),
-  ...extra
-});
+const serializeProduct = (product, extra = {}) => {
+  const data = product.toObject();
+  delete data.qrCode;
+  return {
+    ...data,
+    expired: isExpired(product.expiryDate),
+    ...extra
+  };
+};
+
+const serializePublicProduct = (product, extra = {}) => {
+  const serialized = serializeProduct(product, extra);
+  delete serialized.farmerWallet;
+  delete serialized.currentOwner;
+  const farmer = product.farmer && typeof product.farmer === 'object'
+    ? product.farmer
+    : null;
+  serialized.farmer = farmer
+    ? { name: farmer.name, location: farmer.location }
+    : null;
+  return serialized;
+};
 
 const trackingHash = (blockchainId, status, location, notes, actorWallet) => hashRecord({
   actorWallet: actorWallet.toLowerCase(),
@@ -159,6 +183,7 @@ module.exports = {
   canonicalJson,
   canonicalProductFields,
   currentChainState,
+  deliveryWindowDaysToSeconds,
   hashRecord,
   isExpired,
   loadEncryptedWallet,
@@ -166,6 +191,7 @@ module.exports = {
   requireCustody,
   requireProductDataMatch,
   resolveProduct,
+  serializePublicProduct,
   serializeProduct,
   trackingHash,
   updateProduct

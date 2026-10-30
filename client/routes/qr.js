@@ -12,7 +12,7 @@ const getQrPayload = (walletAddress) => JSON.stringify({
   platform: 'TABASC'
 });
 
-router.post('/generate', protect, async (req, res) => {
+router.post('/generate', protect, async (req, res, next) => {
   try {
     const walletAddress = req.body.walletAddress || req.user.walletAddress;
     if (!walletPattern.test(walletAddress || '')) {
@@ -28,11 +28,11 @@ router.post('/generate', protect, async (req, res) => {
 
     res.json({ walletAddress, qrCodeDataUrl });
   } catch (error) {
-    res.status(500).json({ message: 'Error generating QR code', error: error.message });
+    return next(error);
   }
 });
 
-router.get('/download/:walletAddress', protect, async (req, res) => {
+router.get('/download/:walletAddress', protect, async (req, res, next) => {
   try {
     const { walletAddress } = req.params;
     if (!walletPattern.test(walletAddress)) {
@@ -52,18 +52,23 @@ router.get('/download/:walletAddress', protect, async (req, res) => {
     });
     res.send(buffer);
   } catch (error) {
-    res.status(500).json({ message: 'Error downloading QR code', error: error.message });
+    return next(error);
   }
 });
 
-router.get('/seller/:walletAddress', async (req, res) => {
+router.get('/seller/:walletAddress', protect, async (req, res, next) => {
   try {
-    const user = await User.findOne({ walletAddress: req.params.walletAddress })
-      .select('name role walletAddress location isActive');
+    const walletAddress = req.params.walletAddress.toLowerCase();
+    if (req.user.role !== 'admin' &&
+        req.user.walletAddress.toLowerCase() !== walletAddress) {
+      return res.status(403).json({ message: 'You can only view your own seller profile' });
+    }
+    const user = await User.findOne({ walletAddress })
+      .select('name role walletAddress');
     if (!user) return res.status(404).json({ message: 'Seller not found' });
     res.json({ seller: user });
   } catch (error) {
-    res.status(500).json({ message: 'Error fetching seller information', error: error.message });
+    return next(error);
   }
 });
 

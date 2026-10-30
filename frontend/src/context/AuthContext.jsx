@@ -1,6 +1,7 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import axios from 'axios';
 import { API_URL } from '../config/api';
+import { installUnauthorizedInterceptor } from './authInterceptor';
 
 const AuthContext = createContext();
 
@@ -16,7 +17,16 @@ export const AuthProvider = ({ children }) => {
       setUser(parsed);
       axios.defaults.headers.common['Authorization'] = `Bearer ${parsed.token}`;
     }
+    const interceptorId = installUnauthorizedInterceptor(
+      axios,
+      () => {
+        setUser(null);
+        localStorage.removeItem('tabascUser');
+        delete axios.defaults.headers.common['Authorization'];
+      }
+    );
     setLoading(false);
+    return () => axios.interceptors.response.eject(interceptorId);
   }, []);
 
   const login = async (email, password) => {

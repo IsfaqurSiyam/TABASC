@@ -29,12 +29,16 @@ interface IReputationTracking {
     function actorOf(uint256 productId, Status status) external view returns (address);
     function actedAtOf(uint256 productId, Status status) external view returns (uint256);
     function buyerOf(uint256 productId) external view returns (address);
+    function isRecalled(uint256 productId) external view returns (bool);
 }
 
 /// @title ReputationContract
 /// @notice Computes inspectable batch scores and exponentially accumulated
 /// stakeholder reputations in basis points.
 contract ReputationContract {
+    uint256 public constant FEEDBACK_WINDOW = 14 days;
+    uint256 public constant MIN_BATCHES_FOR_TRUST = 3;
+
     struct Inspection {
         uint16 quality;
         uint16 compliance;
@@ -93,6 +97,10 @@ contract ReputationContract {
     error InvalidThresholds();
     error DeliveryNotAvailable();
     error InvalidDeliveryWindow();
+    error SelfInspection();
+    error ProductRecalled();
+    error FeedbackWindowOpen();
+    error FeedbackWindowClosed();
 
     event InspectionRecorded(
         uint256 indexed productId,
@@ -136,6 +144,7 @@ contract ReputationContract {
     function recordInspection(uint256 productId, uint16 quality, uint16 compliance) external {
         _requireProduct(productId);
         _requireInspector();
+        if (isParticipant(productId, msg.sender)) revert SelfInspection();
         if (quality > 10000 || compliance > 10000) revert InvalidScore();
         if (_inspections[productId].exists) revert AlreadyInspected();
 
@@ -152,9 +161,12 @@ contract ReputationContract {
     /// @notice Records feedback from the buyer already recorded for a sold product.
     function submitFeedback(uint256 productId, uint16 complaint, uint16 satisfaction) external {
         _requireProduct(productId);
+        if (tracking.isRecalled(productId)) revert ProductRecalled();
         if (tracking.getCurrentStatus(productId) != IReputationTracking.Status.Sold) {
             revert ProductNotSold();
         }
+        uint256 soldAt = tracking.actedAtOf(productId, IReputationTracking.Status.Sold);
+        if (block.timestamp > soldAt + FEEDBACK_WINDOW) revert FeedbackWindowClosed();
         if (tracking.buyerOf(productId) != msg.sender) revert NotBuyer();
         if (complaint > 10000 || satisfaction > 10000) revert InvalidScore();
         if (_feedback[productId].exists) revert AlreadyReviewed();
@@ -173,19 +185,30 @@ contract ReputationContract {
     function finalizeScore(uint256 productId, address stakeholder) external returns (uint256 scoreBps) {
         _requireProduct(productId);
         _requireInspector();
+        if (tracking.isRecalled(productId)) revert ProductRecalled();
         if (!_inspections[productId].exists) revert InspectionRequired();
+        if (tracking.getCurrentStatus(productId) != IReputationTracking.Status.Sold) {
+            revert ProductNotSold();
+        }
+        if (isParticipant(productId, _inspections[productId].inspector)) {
+            revert SelfInspection();
+        }
         if (!isParticipant(productId, stakeholder)) revert NonParticipant();
         if (_finalized[productId][stakeholder]) revert AlreadyFinalized();
 
         Inspection storage inspection = _inspections[productId];
         Feedback storage feedback = _feedback[productId];
+        uint256 soldAt = tracking.actedAtOf(productId, IReputationTracking.Status.Sold);
+        if (!feedback.exists && block.timestamp <= soldAt + FEEDBACK_WINDOW) {
+            revert FeedbackWindowOpen();
+        }
         bool hasDelivery =
             uint8(tracking.getCurrentStatus(productId)) >= uint8(IReputationTracking.Status.Delivered);
         uint256[5] memory values;
         bool[5] memory available = [true, hasDelivery, feedback.exists, true, feedback.exists];
         values[0] = inspection.quality;
         values[1] = hasDelivery ? deliveryScoreOf(productId) : 0;
-        values[2] = feedback.exists ? feedback.complaint : 0;
+        values[2] = feedback.exists ? 10000 - feedback.complaint : 0;
         values[3] = inspection.compliance;
         values[4] = feedback.exists ? feedback.satisfaction : 0;
         uint256 batchScore = combine(values, _weights, available);
@@ -228,7 +251,7 @@ contract ReputationContract {
     /// @notice Returns the configured trust level for a stakeholder.
     function getTrustLevel(address stakeholder) external view returns (string memory) {
         Reputation storage reputation = _reputations[stakeholder];
-        if (!reputation.exists) return "Unrated";
+        if (!reputation.exists || reputation.batches < MIN_BATCHES_FOR_TRUST) return "Unrated";
         return trustLevelForScore(reputation.scoreBps);
     }
 

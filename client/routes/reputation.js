@@ -2,6 +2,7 @@ const express = require('express');
 const Batch = require('../models/Batch');
 const ConsumerReview = require('../models/ConsumerReview');
 const Product = require('../models/Product');
+const BatchReputationScore = require('../models/BatchReputationScore');
 const User = require('../models/User');
 const { protect } = require('./auth');
 const { AppError } = require('../middleware/errors');
@@ -16,6 +17,10 @@ const {
   getTransactionCost
 } = require('../blockchain/web3');
 const { assertChainRole } = require('../services/roleAuthorization');
+const {
+  getFinalizedBatchScore,
+  saveBatchReputationScore
+} = require('../services/reputationScores');
 const {
   loadEncryptedWallet,
   recordPendingSync
@@ -195,6 +200,29 @@ router.post('/score', protect, validateRequest({
       throw new AppError(409, 'SCORE_ALREADY_FINALIZED', 'This participant already has a finalized score for this product');
     }
 
+    const status = Number(await TrackingContract.methods
+      .getCurrentStatus(product.blockchainId)
+      .call());
+    if (status !== 5) {
+      throw new AppError(409, 'PRODUCT_NOT_SOLD', 'A reputation score can be finalized only after the product is sold');
+    }
+    const feedback = await ReputationContract.methods.getFeedback(product.blockchainId).call();
+    if (!(feedback.exists === true || feedback.exists === 'true' ||
+          feedback[4] === true || feedback[4] === 'true')) {
+      const soldAt = Number(await TrackingContract.methods
+        .actedAtOf(product.blockchainId, 5)
+        .call());
+      const latestBlock = await web3.eth.getBlock('latest');
+      const eligibleAt = soldAt + 14 * 24 * 60 * 60;
+      if (Number(latestBlock.timestamp) <= eligibleAt) {
+        throw new AppError(
+          409,
+          'FEEDBACK_WINDOW_OPEN',
+          `Feedback remains open; score finalization is available after ${new Date(eligibleAt * 1000).toISOString()}`
+        );
+      }
+    }
+
     const finalize = ReputationContract.methods.finalizeScore(
       product.blockchainId,
       req.body.stakeholderWallet
@@ -211,21 +239,27 @@ router.post('/score', protect, validateRequest({
     const scoreBps = asNumber(reputation, 'scoreBps', 0);
     const finalScore = Math.round(scoreBps / 10);
     const totalBatches = asNumber(reputation, 'batches', 1);
-    let batchUpdate;
+    const batchScoreBps = getFinalizedBatchScore(
+      receipt,
+      product.blockchainId,
+      req.body.stakeholderWallet
+    );
+    const batchTrustLevel = await ReputationContract.methods
+      .trustLevelForScore(batchScoreBps)
+      .call();
+    const batchScore = {
+      batchId: product.batchId,
+      blockchainId: product.blockchainId,
+      stakeholderWallet: req.body.stakeholderWallet,
+      scoreBps: batchScoreBps,
+      finalScore: Math.round(batchScoreBps / 10),
+      trustLevel: batchTrustLevel,
+      totalBatches,
+      transactionHash: receipt.transactionHash,
+      finalizedAt: new Date()
+    };
     try {
-      batchUpdate = await Batch.updateOne(
-        { batchId: product.batchId },
-        {
-          $set: {
-            finalReputationScore: finalScore,
-            trustLevel,
-            reputationTxHash: receipt.transactionHash
-          }
-        }
-      );
-      if (batchUpdate.matchedCount !== 1) {
-        throw new Error('Batch record was not found during reputation synchronization');
-      }
+      await saveBatchReputationScore(BatchReputationScore, batchScore);
     } catch (databaseError) {
       return pendingResponse(res, {
         operation: 'reputation_finalized',
@@ -237,7 +271,9 @@ router.post('/score', protect, validateRequest({
           finalScore,
           scoreBps,
           totalBatches,
-          trustLevel
+          trustLevel,
+          batchScoreBps,
+          batchTrustLevel
         }
       });
     }
@@ -256,6 +292,8 @@ router.post('/score', protect, validateRequest({
       complianceScore: req.body.complianceScore,
       finalScore,
       scoreBps,
+      batchScore: batchScore.finalScore,
+      batchScoreBps,
       totalBatches,
       trustLevel,
       inspectionTxHash,
@@ -438,14 +476,37 @@ router.get('/batch/:batchId', protect, async (req, res, next) => {
   }
 });
 
+router.get('/product/:batchId', async (req, res, next) => {
+  try {
+    const product = await getProduct(req.params.batchId.trim());
+    const farmerWallet = await ProductContract.methods
+      .farmerOf(product.blockchainId)
+      .call();
+    const [reputation, trustLevel] = await Promise.all([
+      ReputationContract.methods.getReputation(farmerWallet).call(),
+      ReputationContract.methods.getTrustLevel(farmerWallet).call()
+    ]);
+    const scoreBps = asNumber(reputation, 'scoreBps', 0);
+    const exists = reputation.exists === true || reputation.exists === 'true' ||
+      reputation[2] === true || reputation[2] === 'true';
+    if (!exists) {
+      throw new AppError(404, 'REPUTATION_NOT_FOUND', 'No reputation record found for this farmer');
+    }
+    return res.json({
+      finalScore: Math.round(scoreBps / 10),
+      trustLevel,
+      totalBatches: asNumber(reputation, 'batches', 1)
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get('/leaderboard/top', async (req, res, next) => {
   try {
-    const topBatches = await Batch.find({
-      inspectionStatus: 'inspected',
-      finalReputationScore: { $exists: true }
-    })
-      .populate('farmer', 'name email location')
-      .sort({ finalReputationScore: -1 })
+    const topBatches = await BatchReputationScore.find()
+      .select('batchId blockchainId stakeholderWallet scoreBps finalScore trustLevel transactionHash finalizedAt')
+      .sort({ scoreBps: -1, finalizedAt: -1 })
       .limit(10);
     return res.json(topBatches);
   } catch (error) {
@@ -489,7 +550,7 @@ router.get('/:wallet', async (req, res, next) => {
       trustLevel,
       totalBatches: batches,
       lastUpdated: history.length
-        ? new Date(Number(history[history.length - 1].timestamp) * 1000).toLocaleString()
+        ? new Date(Number(history[history.length - 1].timestamp) * 1000).toISOString()
         : null,
       history: history.map((entry) => {
         const batch = scoresByBatch.get(entry.batchId);
@@ -497,7 +558,7 @@ router.get('/:wallet', async (req, res, next) => {
           finalScore: Math.round(Number(entry.scoreBps) / 10),
           scoreBps: Number(entry.scoreBps),
           batchId: entry.batchId,
-          timestamp: new Date(Number(entry.timestamp) * 1000).toLocaleString(),
+          timestamp: new Date(Number(entry.timestamp) * 1000).toISOString(),
           scores: batch ? {
             quality: batch.qualityScore,
             delivery: batch.deliveryScore,
