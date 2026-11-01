@@ -19,5 +19,15 @@ module.exports = {
         }
       }
     }
-  }
+  },
+  ...(process.env.REPORT_GAS === "true"
+    ? {
+        mocha: {
+          reporter: "eth-gas-reporter",
+          reporterOptions: {
+            currency: "USD"
+          }
+        }
+      }
+    : {})
 };

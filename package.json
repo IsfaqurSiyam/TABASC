@@ -7,6 +7,7 @@
     "contracts:migrate": "truffle migrate --reset --config truffle-config.js"
   },
   "devDependencies": {
+    "eth-gas-reporter": "^0.2.27",
     "truffle": "^5.11.5"
   }
 }
