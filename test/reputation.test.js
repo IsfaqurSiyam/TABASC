@@ -774,4 +774,43 @@ contract('TABASC contracts', (accounts) => {
     await tracking.handover(id, distributor, { from: farmer });
     assert.equal(await product.custodianOf(id), distributor);
   });
+
+  it('does not restrict a new distributor with three good batches', async () => {
+    const newDistributor = outsider;
+    await registry.grantRole(await registry.DISTRIBUTOR_ROLE(), newDistributor, { from: admin });
+
+    for (let index = 0; index < 3; index++) {
+      const productId = await registerProduct(1000);
+      await tracking.handover(productId, newDistributor, { from: farmer });
+      await update(productId, 1, newDistributor);
+      await update(productId, 2, newDistributor);
+
+      const registeredAt = Number(await product.registeredAtOf(productId));
+      const latest = await web3.eth.getBlock('latest');
+      const waitSeconds = 20 - (Number(latest.timestamp) - registeredAt);
+      if (waitSeconds > 0) await rpc('evm_increaseTime', [waitSeconds]);
+      await update(productId, 3, newDistributor);
+
+      await tracking.handoverWithCare(
+        productId,
+        retailer,
+        [true, true, true, true],
+        'Product remained in proper storage conditions.',
+        { from: newDistributor }
+      );
+      await update(productId, 4, retailer, 'Shop');
+      await update(productId, 5, retailer, 'Shop');
+      await tracking.recordBuyer(productId, buyer, { from: retailer });
+      await tracking.confirmBuyer(productId, { from: buyer });
+
+      await reputation.recordInspection(productId, 10000, 10000, { from: inspector });
+      await reputation.submitFeedback(productId, 0, 10000, { from: buyer });
+      await reputation.finalizeScore(productId, newDistributor, { from: inspector });
+    }
+
+    const score = await reputation.getReputation(newDistributor);
+    assert.equal(score.batches.toString(), '3');
+    assert.equal(score.scoreBps.toString(), '10000');
+    assert.equal(await reputation.isRestricted(newDistributor), false);
+  });
 });
