@@ -1,0 +1,73 @@
+﻿Multiple frameworks detected: solc, Solc-json. Using solc (highest priority). Use --compile-force-framework to override.
+'solc --version' running
+'solc contracts\ReputationContract.sol --combined-json abi,ast,bin,bin-runtime,srcmap,srcmap-runtime,userdoc,devdoc,hashes --allow-paths .,E:\TABASC\contracts' running
+slither : INFO:Detectors:
+At line:1 char:1
++ slither contracts\ReputationContract.sol 2>&1 | 
+Out-File -Encoding ut ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (INFO:Detect 
+   ors::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Detector: uninitialized-local
+ReputationContract.combine(uint256[5],uint256[5],bool[5])
+.weightedTotal (contracts/ReputationContract.sol#487) is 
+a local variable never initialized
+ReputationContract.combine(uint256[5],uint256[5],bool[5])
+.availableWeight (contracts/ReputationContract.sol#488) 
+is a local variable never initialized
+Reference: https://github.com/crytic/slither/wiki/Detecto
+r-Documentation#uninitialized-local-variables
+INFO:Detectors:
+Detector: timestamp
+ReputationContract.submitFeedback(uint256,uint16,uint16) 
+(contracts/ReputationContract.sol#194-214) uses 
+timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp > soldAt + FEEDBACK_WINDOW 
+(contracts/ReputationContract.sol#201)
+ReputationContract.finalizeScore(uint256,address) 
+(contracts/ReputationContract.sol#217-278) uses 
+timestamp for comparisons
+	Dangerous comparisons:
+	- ! feedback.exists && block.timestamp <= soldAt + 
+FEEDBACK_WINDOW (contracts/ReputationContract.sol#234)
+ReputationContract.isParticipant(uint256,address) 
+(contracts/ReputationContract.sol#392-398) uses 
+timestamp for comparisons
+	Dangerous comparisons:
+	- stakeholder == product.farmerOf(productId) || 
+stakeholder == tracking.actorOf(productId,IReputationTrac
+king.Status.PickedUp) || stakeholder == tracking.actorOf(
+productId,IReputationTracking.Status.OnShelf) 
+(contracts/ReputationContract.sol#394-397)
+Reference: https://github.com/crytic/slither/wiki/Detecto
+r-Documentation#block-timestamp
+INFO:Detectors:
+Detector: cyclomatic-complexity
+ReputationContract.finalizeScore(uint256,address) 
+(contracts/ReputationContract.sol#217-278) has a high 
+cyclomatic complexity (12).
+Reference: https://github.com/crytic/slither/wiki/Detecto
+r-Documentation#cyclomatic-complexity
+INFO:Detectors:
+Detector: solc-version
+Version constraint ^0.8.19 contains known severe issues 
+(https://solidity.readthedocs.io/en/latest/bugs.html)
+	- VerbatimInvalidDeduplication
+	- FullInlinerNonExpressionSplitArgumentEvaluationOrder
+	- MissingSideEffectsOnSelectorAccess.
+It is used by:
+	- ^0.8.19 (contracts/ReputationContract.sol#2)
+Reference: https://github.com/crytic/slither/wiki/Detecto
+r-Documentation#incorrect-versions-of-solidity
+INFO:Detectors:
+Detector: naming-convention
+Function IReputationRoleRegistry.INSPECTOR_ROLE() 
+(contracts/ReputationContract.sol#6) is not in mixedCase
+Reference: https://github.com/crytic/slither/wiki/Detecto
+r-Documentation#conformance-to-solidity-naming-convention
+s
+INFO:Slither:contracts\ReputationContract.sol analyzed 
+(4 contracts with 102 detectors), 8 result(s) found

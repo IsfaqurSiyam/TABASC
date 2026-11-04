@@ -1,0 +1,67 @@
+﻿Multiple frameworks detected: solc, Solc-json. Using solc (highest priority). Use --compile-force-framework to override.
+'solc --version' running
+'solc contracts\TrackingContract.sol --combined-json abi,ast,bin,bin-runtime,srcmap,srcmap-runtime,userdoc,devdoc,hashes --allow-paths .,E:\TABASC\contracts' running
+slither : INFO:Detectors:
+At line:1 char:1
++ slither contracts\TrackingContract.sol 2>&1 | Out-File 
+-Encoding utf8 ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (INFO:Detect 
+   ors::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Detector: reentrancy-events
+Reentrancy in TrackingContract.handover(uint256,address) 
+(contracts/TrackingContract.sol#152-173):
+	External calls:
+	- product.setCustodian(productId,to) 
+(contracts/TrackingContract.sol#171)
+	Event emitted after the call(s):
+	- CustodianTransferred(productId,msg.sender,to,block.tim
+estamp) (contracts/TrackingContract.sol#172)
+Reentrancy in TrackingContract.handoverWithCare(uint256,a
+ddress,bool[4],string) 
+(contracts/TrackingContract.sol#176-205):
+	External calls:
+	- product.setCustodian(productId,to) 
+(contracts/TrackingContract.sol#202)
+	Event emitted after the call(s):
+	- CareAttestationRecorded(productId,attestation.distribu
+tor,attestation.retailer,attestation.storedSince,attestat
+ion.handedOverAt,attestation.storageDays,attestation.stor
+ageSeconds,attestation.temperatureMaintained,attestation.
+packagingIntact,attestation.hygieneMaintained,attestation
+.noDamageOrSpoilage,attestation.explanation,attestation.d
+etailsHash) (contracts/TrackingContract.sol#477-491)
+		- _emitCareAttestation(productId,attestation) 
+(contracts/TrackingContract.sol#204)
+	- CustodianTransferred(productId,msg.sender,to,attestati
+on.handedOverAt) (contracts/TrackingContract.sol#203)
+Reference: https://github.com/crytic/slither/wiki/Detecto
+r-Documentation#reentrancy-vulnerabilities-4
+INFO:Detectors:
+Detector: solc-version
+Version constraint ^0.8.19 contains known severe issues 
+(https://solidity.readthedocs.io/en/latest/bugs.html)
+	- VerbatimInvalidDeduplication
+	- FullInlinerNonExpressionSplitArgumentEvaluationOrder
+	- MissingSideEffectsOnSelectorAccess.
+It is used by:
+	- ^0.8.19 (contracts/TrackingContract.sol#2)
+Reference: https://github.com/crytic/slither/wiki/Detecto
+r-Documentation#incorrect-versions-of-solidity
+INFO:Detectors:
+Detector: naming-convention
+Function ITrackingRoleRegistry.FARMER_ROLE() 
+(contracts/TrackingContract.sol#6) is not in mixedCase
+Function ITrackingRoleRegistry.DISTRIBUTOR_ROLE() 
+(contracts/TrackingContract.sol#7) is not in mixedCase
+Function ITrackingRoleRegistry.RETAILER_ROLE() 
+(contracts/TrackingContract.sol#8) is not in mixedCase
+Function ITrackingRoleRegistry.INSPECTOR_ROLE() 
+(contracts/TrackingContract.sol#9) is not in mixedCase
+Reference: https://github.com/crytic/slither/wiki/Detecto
+r-Documentation#conformance-to-solidity-naming-convention
+s
+INFO:Slither:contracts\TrackingContract.sol analyzed (4 
+contracts with 102 detectors), 7 result(s) found
