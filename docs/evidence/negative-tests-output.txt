@@ -1,0 +1,9 @@
+PASS | No Token - Protected Endpoint | expected 401 (UNAUTHORIZED) | actual 401 (UNAUTHORIZED)
+PASS | Invalid Token - Protected Endpoint | expected 401 (UNAUTHORIZED) | actual 401 (UNAUTHORIZED)
+SKIP | Wrong Role - Register Product | expected 403 | actual NOT RUN | missing CONSUMER_TOKEN
+PASS | Missing Fields - Register Product | expected 400 (VALIDATION_ERROR) | actual 400 (VALIDATION_ERROR)
+SKIP | Duplicate Action - Confirm Buyer | expected 409 | actual NOT RUN | missing CONSUMER_TOKEN, SOLD_PRODUCT_ID
+SKIP | Restricted Recipient - Handover | expected 403 | actual NOT RUN | missing HARVESTED_PRODUCT_ID, RESTRICTED_DISTRIBUTOR_EMAIL
+SKIP | Feedback After Recall | expected 409 | actual NOT RUN | missing CONSUMER_TOKEN, RECALLED_SOLD_BATCH_ID
+PASS | Public Verify - Unknown Product | expected 404 (PRODUCT_NOT_FOUND) | actual 404 (PRODUCT_NOT_FOUND)
+Total: 8 | PASS: 4 | FAIL: 0 | SKIP: 4
