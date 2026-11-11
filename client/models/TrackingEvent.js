@@ -13,7 +13,14 @@ const TrackingEventSchema = new mongoose.Schema({
   },
   eventType: {
     type: String,
-    enum: ['shipment_update', 'handover', 'buyer_recorded', 'recall'],
+    enum: [
+      'shipment_update',
+      'handover',
+      'buyer_proposed',
+      'buyer_confirmed',
+      'buyer_recorded',
+      'recall'
+    ],
     required: true
   },
   status: {

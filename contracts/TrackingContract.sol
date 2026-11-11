@@ -7,6 +7,11 @@ interface ITrackingRoleRegistry {
     function DISTRIBUTOR_ROLE() external view returns (bytes32);
     function RETAILER_ROLE() external view returns (bytes32);
     function INSPECTOR_ROLE() external view returns (bytes32);
+function isAdmin(address account) external view returns (bool);
+}
+
+interface IReputationCheck {
+function isRestricted(address stakeholder) external view returns (bool);
 }
 
 interface ITrackingProduct {
@@ -62,6 +67,7 @@ contract TrackingContract {
 
     ITrackingRoleRegistry public immutable registry;
     ITrackingProduct public immutable product;
+    address public reputationContract;
 
     mapping(uint256 => Status) private _currentStatus;
     mapping(uint256 => Update[]) private _history;
@@ -71,6 +77,7 @@ contract TrackingContract {
     mapping(uint256 => bool) private _recalled;
     mapping(uint256 => string) private _recallReason;
     mapping(uint256 => address) private _buyers;
+    mapping(uint256 => bool) private _buyerConfirmed;
     mapping(uint256 => CareAttestation) private _careAttestations;
     mapping(uint256 => bool) private _hasCareAttestation;
 
@@ -87,6 +94,7 @@ contract TrackingContract {
     error AlreadyRecalled();
     error EmptyRecallReason();
     error BuyerAlreadyRecorded();
+    error BuyerAlreadyConfirmed();
     error BuyerNotRecorded();
     error InvalidBuyer();
     error InvalidStatus();
@@ -94,6 +102,8 @@ contract TrackingContract {
     error CareAttestationAlreadyExists();
     error EmptyCareExplanation();
     error CareIssueExplanationTooShort();
+    error RecipientRestricted();
+    error ReputationContractAlreadySet();
 
     event ShipmentUpdated(
         uint256 indexed productId,
@@ -111,7 +121,9 @@ contract TrackingContract {
         uint256 timestamp
     );
     event BuyerRecorded(uint256 indexed productId, address indexed buyer, address indexed retailer);
+    event BuyerProposed(uint256 indexed productId, address indexed buyer, address indexed retailer);
     event RecallIssued(uint256 indexed productId, address indexed inspector, string reason, uint256 timestamp);
+    event ReputationContractSet(address indexed reputationContract);
     event CareAttestationRecorded(
         uint256 indexed productId,
         address indexed distributor,
@@ -143,6 +155,9 @@ contract TrackingContract {
         if (msg.sender != product.custodianOf(productId)) revert Unauthorized();
         if (to == address(0)) revert InvalidAddress();
         if (to == msg.sender) revert SameCustodian();
+        if (reputationContract != address(0) && IReputationCheck(reputationContract).isRestricted(to)) {
+            revert RecipientRestricted();
+        }
 
         Status current = _currentStatus[productId];
         if (current == Status.Harvested) {
@@ -172,6 +187,9 @@ contract TrackingContract {
         if (_currentStatus[productId] != Status.Delivered) revert InvalidHandoverStatus();
         if (to == address(0)) revert InvalidAddress();
         if (to == msg.sender) revert SameCustodian();
+        if (reputationContract != address(0) && IReputationCheck(reputationContract).isRestricted(to)) {
+            revert RecipientRestricted();
+        }
         if (!registry.hasRole(registry.RETAILER_ROLE(), to)) revert InvalidRecipientRole();
         CareAttestation memory attestation = _createCareAttestation(
             productId,
@@ -233,7 +251,7 @@ contract TrackingContract {
         emit ShipmentUpdated(productId, next, msg.sender, location, notes, dataHash, block.timestamp);
     }
 
-    /// @notice Records the consumer address for a sold product exactly once.
+    /// @notice Proposes a consumer address for a sold product; the consumer must confirm.
     function recordBuyer(uint256 productId, address buyer) external {
         _requireProduct(productId);
         _requireNotRecalled(productId);
@@ -243,7 +261,19 @@ contract TrackingContract {
         if (_buyers[productId] != address(0)) revert BuyerAlreadyRecorded();
         if (buyer == address(0) || buyer == msg.sender) revert InvalidBuyer();
         _buyers[productId] = buyer;
-        emit BuyerRecorded(productId, buyer, msg.sender);
+        emit BuyerProposed(productId, buyer, msg.sender);
+    }
+
+    /// @notice Confirms the consumer's proposed buyer assignment.
+    function confirmBuyer(uint256 productId) external {
+        _requireProduct(productId);
+        _requireNotRecalled(productId);
+        if (_currentStatus[productId] != Status.Sold) revert InvalidHandoverStatus();
+        if (_buyers[productId] == address(0)) revert BuyerNotRecorded();
+        if (_buyers[productId] != msg.sender) revert Unauthorized();
+        if (_buyerConfirmed[productId]) revert BuyerAlreadyConfirmed();
+        _buyerConfirmed[productId] = true;
+        emit BuyerRecorded(productId, msg.sender, product.custodianOf(productId));
     }
 
     /// @notice Blocks future movement of an unsafe product.
@@ -256,6 +286,15 @@ contract TrackingContract {
         _recalled[productId] = true;
         _recallReason[productId] = reason;
         emit RecallIssued(productId, msg.sender, reason, block.timestamp);
+    }
+
+    /// @notice Sets the reputation contract once, by an administrator.
+    function setReputation(address reputationAddress) external {
+        _requireAdmin();
+        if (reputationContract != address(0)) revert ReputationContractAlreadySet();
+        if (reputationAddress == address(0)) revert InvalidAddress();
+        reputationContract = reputationAddress;
+        emit ReputationContractSet(reputationAddress);
     }
 
     /// @notice Returns the current status; a registered product starts Harvested.
@@ -306,8 +345,20 @@ contract TrackingContract {
     function buyerOf(uint256 productId) external view returns (address) {
         _requireProduct(productId);
         address buyer = _buyers[productId];
-        if (buyer == address(0)) revert BuyerNotRecorded();
+        if (buyer == address(0) || !_buyerConfirmed[productId]) revert BuyerNotRecorded();
         return buyer;
+    }
+
+    /// @notice Returns the proposed buyer address, whether confirmed or not.
+    function proposedBuyerOf(uint256 productId) external view returns (address) {
+        _requireProduct(productId);
+        return _buyers[productId];
+    }
+
+    /// @notice Returns whether the proposed consumer has confirmed the assignment.
+    function isBuyerConfirmed(uint256 productId) external view returns (bool) {
+        _requireProduct(productId);
+        return _buyerConfirmed[productId];
     }
 
     /// @notice Returns whether a product has been recalled.
@@ -365,6 +416,10 @@ contract TrackingContract {
 
     function _requireProduct(uint256 productId) private view {
         if (!product.exists(productId)) revert ProductNotFound();
+    }
+
+    function _requireAdmin() private view {
+        if (!registry.isAdmin(msg.sender)) revert Unauthorized();
     }
 
     function _requireNotRecalled(uint256 productId) private view {

@@ -1,0 +1,24 @@
+$kind: http-request
+name: Duplicate Action - Confirm Buyer
+order: 5000
+url: '{{base_url}}/api/tracking/{{sold_product_id}}/buyer/confirm'
+method: POST
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{consumer_token}}'
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      const body = pm.response.json();
+      pm.test("Returns 409", () => pm.response.to.have.status(409));
+      pm.test("Returns the standard error shape", () => {
+          pm.expect(body.message).to.be.a("string").and.not.empty;
+          pm.expect(body.code).to.be.a("string").and.not.empty;
+      });
+      pm.test("Reports an already-confirmed buyer", () => {
+          pm.expect(body.message).to.eql("This buyer assignment has already been confirmed");
+          pm.expect(body.code).to.eql("BUYER_ALREADY_CONFIRMED");
+      });

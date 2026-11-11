@@ -1,0 +1,33 @@
+$kind: http-request
+name: Restricted Recipient - Handover
+order: 6000
+url: '{{base_url}}/api/products/{{harvested_product_id}}/handover'
+method: POST
+headers:
+  - key: Content-Type
+    value: application/json
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{farmer_token}}'
+body:
+  type: json
+  content: |-
+    {
+      "email": "{{restricted_distributor_email}}"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      const body = pm.response.json();
+      pm.test("Returns 403", () => pm.response.to.have.status(403));
+      pm.test("Returns the standard error shape", () => {
+          pm.expect(body.message).to.be.a("string").and.not.empty;
+          pm.expect(body.code).to.be.a("string").and.not.empty;
+      });
+      pm.test("Reports the restricted recipient", () => {
+          pm.expect(body.message).to.eql("This recipient is restricted by the trust system and cannot receive handover");
+          pm.expect(body.code).to.eql("RECIPIENT_RESTRICTED");
+      });

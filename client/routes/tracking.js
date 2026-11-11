@@ -245,8 +245,14 @@ router.post('/:id/buyer', protect, validateRequest({
     }
     const product = await resolveProduct(req.params.id);
     if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
-    if (product.buyer) {
-      throw new AppError(409, 'BUYER_ALREADY_RECORDED', 'A buyer has already been recorded');
+    if (product.buyer || product.proposedBuyer) {
+      throw new AppError(
+        409,
+        product.buyer ? 'BUYER_ALREADY_RECORDED' : 'BUYER_CONFIRMATION_PENDING',
+        product.buyer
+          ? 'A buyer has already confirmed this product'
+          : 'The proposed consumer has not confirmed this product yet'
+      );
     }
     const chainState = await currentChainState(product.blockchainId);
     if (chainState.status !== 'Sold') {
@@ -281,22 +287,22 @@ router.post('/:id/buyer', protect, validateRequest({
     });
     try {
       await updateProduct(product._id, {
-        $set: { buyer: buyer._id, transactionHash: receipt.transactionHash }
+        $set: { proposedBuyer: buyer._id, transactionHash: receipt.transactionHash }
       });
       await TrackingEvent.create({
         product: product._id,
         blockchainId: product.blockchainId,
-        eventType: 'buyer_recorded',
+        eventType: 'buyer_proposed',
         status: 'Sold',
         actor: req.user._id,
         actorWallet: req.user.walletAddress,
         dataHash: product.dataHash,
         txHash: receipt.transactionHash,
-        details: { buyerId: String(buyer._id), buyerWallet: buyer.walletAddress }
+        details: { buyerId: String(buyer._id) }
       });
     } catch (databaseError) {
       return handlePendingSync(res, {
-        operation: 'buyer_recorded',
+        operation: 'buyer_proposed',
         blockchainId: product.blockchainId,
         txHash: receipt.transactionHash,
         payload: {
@@ -304,20 +310,97 @@ router.post('/:id/buyer', protect, validateRequest({
           buyerId: String(buyer._id),
           buyerWallet: buyer.walletAddress,
           event: {
-            eventType: 'buyer_recorded',
+            eventType: 'buyer_proposed',
             status: 'Sold',
             actorId: String(req.user._id),
             actorWallet: req.user.walletAddress,
             dataHash: product.dataHash,
-            details: { buyerId: String(buyer._id), buyerWallet: buyer.walletAddress }
+            details: { buyerId: String(buyer._id) }
           }
         }
       });
     }
     return res.json({
-      message: 'Buyer recorded successfully',
+      message: 'Buyer confirmation requested',
       blockchainId: product.blockchainId,
-      buyer: { _id: buyer._id, name: buyer.name, email: buyer.email },
+      proposedBuyer: { _id: buyer._id, name: buyer.name },
+      txHash: receipt.transactionHash
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post('/:id/buyer/confirm', protect, validateRequest({
+  params: { id: { required: true, type: 'string' } }
+}), async (req, res, next) => {
+  try {
+    if (req.user.role !== 'consumer') {
+      throw new AppError(403, 'FORBIDDEN', 'Only consumers can confirm a buyer assignment');
+    }
+    const product = await resolveProduct(req.params.id);
+    if (!product) throw new AppError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
+    const chainState = await currentChainState(product.blockchainId);
+    if (chainState.status !== 'Sold') {
+      throw new AppError(409, 'PRODUCT_NOT_SOLD', 'A buyer assignment can be confirmed only after the product is sold');
+    }
+    if (chainState.recalled) {
+      throw new AppError(409, 'PRODUCT_RECALLED', 'A buyer assignment cannot be confirmed for a recalled product');
+    }
+    const proposedBuyer = await TrackingContract.methods
+      .proposedBuyerOf(product.blockchainId)
+      .call();
+    if (proposedBuyer.toLowerCase() !== req.user.walletAddress.toLowerCase()) {
+      throw new AppError(403, 'NOT_PROPOSED_BUYER', 'Only the selected consumer can confirm this buyer assignment');
+    }
+
+    const method = TrackingContract.methods.confirmBuyer(product.blockchainId);
+    const encryptedWallet = await loadEncryptedWallet(req.user._id);
+    const receipt = await sendFromWallet(encryptedWallet, {
+      to: TrackingContract.options.address,
+      data: method.encodeABI()
+    });
+    try {
+      await updateProduct(product._id, {
+        $set: {
+          buyer: req.user._id,
+          proposedBuyer: null,
+          transactionHash: receipt.transactionHash
+        }
+      });
+      await TrackingEvent.create({
+        product: product._id,
+        blockchainId: product.blockchainId,
+        eventType: 'buyer_confirmed',
+        status: 'Sold',
+        actor: req.user._id,
+        actorWallet: req.user.walletAddress,
+        dataHash: product.dataHash,
+        txHash: receipt.transactionHash,
+        details: { buyerId: String(req.user._id) }
+      });
+    } catch (databaseError) {
+      return handlePendingSync(res, {
+        operation: 'buyer_confirmed',
+        blockchainId: product.blockchainId,
+        txHash: receipt.transactionHash,
+        payload: {
+          productId: String(product._id),
+          buyerId: String(req.user._id),
+          event: {
+            eventType: 'buyer_confirmed',
+            status: 'Sold',
+            actorId: String(req.user._id),
+            actorWallet: req.user.walletAddress,
+            dataHash: product.dataHash,
+            details: { buyerId: String(req.user._id) }
+          }
+        }
+      });
+    }
+    return res.json({
+      message: 'Buyer assignment confirmed',
+      blockchainId: product.blockchainId,
       txHash: receipt.transactionHash
     });
   } catch (error) {
@@ -437,13 +520,19 @@ router.get('/:blockchainId', async (req, res, next) => {
     });
     const transferEvents = await TrackingEvent.find({
       blockchainId,
-      eventType: { $in: ['handover', 'buyer_recorded', 'recall'] }
+      eventType: {
+        $in: ['handover', 'buyer_proposed', 'buyer_confirmed', 'buyer_recorded', 'recall']
+      }
     }).sort({ time: 1 });
     const additionalEvents = transferEvents.map((event) => ({
       status: event.eventType,
       location: event.location,
       notes: event.eventType === 'handover'
         ? `Custody transferred to ${event.details?.recipientWallet || ''}`
+        : event.eventType === 'buyer_proposed'
+          ? 'Retailer requested buyer confirmation'
+          : event.eventType === 'buyer_confirmed' || event.eventType === 'buyer_recorded'
+            ? 'Buyer confirmed'
         : event.eventType === 'recall'
           ? event.details?.reason || ''
           : 'Buyer recorded',

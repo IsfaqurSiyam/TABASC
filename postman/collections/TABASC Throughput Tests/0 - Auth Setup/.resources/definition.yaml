@@ -1,0 +1,4 @@
+$kind: collection
+name: '0 - Auth Setup'
+description: Run this first to authenticate and store the JWT token for all other requests.
+order: 1000

@@ -32,6 +32,10 @@ const BatchReputationScoreSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  configVersion: {
+    type: Number,
+    min: 1
+  },
   transactionHash: {
     type: String,
     required: true

@@ -1,0 +1,4 @@
+$kind: collection
+name: '6 - Throughput Summary'
+description: Run this LAST after all other folders. Generates the final throughput report for your thesis.
+order: 7000

@@ -1,0 +1,21 @@
+$kind: http-request
+name: Public Verify - Unknown Product
+order: 8000
+url: '{{base_url}}/api/verify/9007199254740991'
+method: GET
+auth:
+  type: noauth
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      const body = pm.response.json();
+      pm.test("Returns 404", () => pm.response.to.have.status(404));
+      pm.test("Returns the standard error shape", () => {
+          pm.expect(body.message).to.be.a("string").and.not.empty;
+          pm.expect(body.code).to.be.a("string").and.not.empty;
+      });
+      pm.test("Reports the unknown product", () => {
+          pm.expect(body.message).to.eql("Product not found");
+          pm.expect(body.code).to.eql("PRODUCT_NOT_FOUND");
+      });

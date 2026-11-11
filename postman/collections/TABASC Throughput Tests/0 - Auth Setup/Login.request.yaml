@@ -1,0 +1,34 @@
+$kind: http-request
+name: Login (Get Token)
+order: 1000
+url: '{{base_url}}/api/auth/login'
+method: POST
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "email": "{{admin_email}}",
+      "password": "{{admin_password}}"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      // Store token for all subsequent requests
+      const jsonData = pm.response.json();
+      if (jsonData.token) {
+          pm.environment.set("token", jsonData.token);
+          console.log("✅ Token stored successfully");
+      } else {
+          console.warn("⚠️ No token in response - check credentials");
+      }
+      
+      pm.test("Login successful", function () {
+          pm.response.to.have.status(200);
+      });
+      pm.test("Token received", function () {
+          pm.expect(jsonData.token).to.be.a('string');
+      });

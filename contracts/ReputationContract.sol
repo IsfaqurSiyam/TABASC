@@ -59,12 +59,21 @@ contract ReputationContract {
         uint256 scoreBps;
         uint256 batches;
         bool exists;
+        string trustLevel;
     }
 
     struct ScoreHistory {
         uint256 scoreBps;
         uint256 timestamp;
         string batchId;
+        uint256 configVersion;
+    }
+
+    struct ConfigSnapshot {
+        uint256[5] weights;
+        uint256 alpha;
+        uint256[4] thresholds;
+        bool exists;
     }
 
     IReputationRoleRegistry public immutable registry;
@@ -74,15 +83,20 @@ contract ReputationContract {
     uint256[5] private _weights = [uint256(3000), 2500, 2000, 1500, 1000];
     uint256 private _alpha = 3000;
     uint256[4] private _thresholds = [uint256(2000), 4000, 6000, 8000];
+    uint256 public configVersion = 1;
 
     mapping(uint256 => Inspection) private _inspections;
     mapping(uint256 => Feedback) private _feedback;
     mapping(address => Reputation) private _reputations;
     mapping(address => ScoreHistory[]) private _history;
+    mapping(address => bool) private _suspended;
     mapping(uint256 => mapping(address => bool)) private _finalized;
+    mapping(uint256 => mapping(address => bool)) private _penaltyApplied;
+    mapping(uint256 => ConfigSnapshot) private _configSnapshots;
 
     error Unauthorized();
     error InvalidAddress();
+    error EmptyField();
     error ProductNotFound();
     error InvalidScore();
     error AlreadyInspected();
@@ -101,6 +115,14 @@ contract ReputationContract {
     error ProductRecalled();
     error FeedbackWindowOpen();
     error FeedbackWindowClosed();
+    error ConfigVersionNotFound();
+    error StakeholderSuspended();
+    error RecipientRestricted();
+    error RecipientRestrictedStatus();
+    error ProductParticipantRequired();
+    error PenaltyAlreadyApplied();
+    error RecallRequired();
+    error InvalidPenalty();
 
     event InspectionRecorded(
         uint256 indexed productId,
@@ -122,11 +144,20 @@ contract ReputationContract {
         uint256 batchScore,
         uint256 scoreBps,
         uint256 batches,
+        uint256 configVersion,
         uint256 timestamp
     );
     event WeightsUpdated(uint256[5] weights);
     event AlphaUpdated(uint256 alpha);
     event ThresholdsUpdated(uint256[4] thresholds);
+    event SuspendedSet(address indexed stakeholder, bool suspended);
+    event PenaltyApplied(
+        uint256 indexed productId,
+        address indexed stakeholder,
+        uint256 penaltyBps,
+        string reason,
+        uint256 timestamp
+    );
 
     /// @notice Connects reputation scoring to the registry, product and journey.
     constructor(address registryAddress, address productAddress, address trackingAddress) {
@@ -138,6 +169,7 @@ contract ReputationContract {
         registry = IReputationRoleRegistry(registryAddress);
         product = IReputationProduct(productAddress);
         tracking = IReputationTracking(trackingAddress);
+        _saveConfigSnapshot();
     }
 
     /// @notice Records an inspector's quality and compliance ratings once.
@@ -223,10 +255,16 @@ contract ReputationContract {
 
         current.scoreBps = scoreBps;
         current.batches += 1;
+        current.trustLevel = _trustLevelForScore(scoreBps, _thresholds);
         _finalized[productId][stakeholder] = true;
         string memory batchId = product.batchIdOf(productId);
         _history[stakeholder].push(
-            ScoreHistory({scoreBps: scoreBps, timestamp: block.timestamp, batchId: batchId})
+            ScoreHistory({
+                scoreBps: scoreBps,
+                timestamp: block.timestamp,
+                batchId: batchId,
+                configVersion: configVersion
+            })
         );
         emit ReputationFinalized(
             productId,
@@ -234,6 +272,7 @@ contract ReputationContract {
             batchScore,
             scoreBps,
             current.batches,
+            configVersion,
             block.timestamp
         );
     }
@@ -252,12 +291,67 @@ contract ReputationContract {
     function getTrustLevel(address stakeholder) external view returns (string memory) {
         Reputation storage reputation = _reputations[stakeholder];
         if (!reputation.exists || reputation.batches < MIN_BATCHES_FOR_TRUST) return "Unrated";
-        return trustLevelForScore(reputation.scoreBps);
+        return reputation.trustLevel;
     }
 
     /// @notice Returns the score history, with one entry per finalized batch.
     function getHistory(address stakeholder) external view returns (ScoreHistory[] memory) {
         return _history[stakeholder];
+    }
+
+    /// @notice Returns whether a stakeholder is restricted from receiving more product custody.
+    function isRestricted(address stakeholder) external view returns (bool) {
+        Reputation storage reputation = _reputations[stakeholder];
+        if (_suspended[stakeholder]) return true;
+        if (!reputation.exists || reputation.batches < MIN_BATCHES_FOR_TRUST) return false;
+        return reputation.scoreBps < _thresholds[0];
+    }
+
+    function setSuspended(address stakeholder, bool suspended) external {
+        _requireAdmin();
+        if (stakeholder == address(0)) revert InvalidAddress();
+        _suspended[stakeholder] = suspended;
+        emit SuspendedSet(stakeholder, suspended);
+    }
+
+    function applyPenalty(
+        uint256 productId,
+        address stakeholder,
+        uint256 penaltyBps,
+        string calldata reason
+    ) external {
+        _requireInspector();
+        _requireProduct(productId);
+        if (stakeholder == address(0)) revert InvalidAddress();
+        if (!isParticipant(productId, stakeholder)) revert NonParticipant();
+        if (!tracking.isRecalled(productId)) revert RecallRequired();
+        if (_penaltyApplied[productId][stakeholder]) revert PenaltyAlreadyApplied();
+        if (penaltyBps == 0 || penaltyBps > 10000) revert InvalidPenalty();
+        if (bytes(reason).length == 0) revert EmptyField();
+
+        Reputation storage current = _reputations[stakeholder];
+        if (!current.exists) {
+            current.exists = true;
+            current.scoreBps = 0;
+            current.batches = 0;
+            current.trustLevel = _trustLevelForScore(0, _thresholds);
+        }
+        if (current.scoreBps < penaltyBps) {
+            current.scoreBps = 0;
+        } else {
+            current.scoreBps -= penaltyBps;
+        }
+        current.trustLevel = _trustLevelForScore(current.scoreBps, _thresholds);
+        _penaltyApplied[productId][stakeholder] = true;
+        _history[stakeholder].push(
+            ScoreHistory({
+                scoreBps: current.scoreBps,
+                timestamp: block.timestamp,
+                batchId: product.batchIdOf(productId),
+                configVersion: configVersion
+            })
+        );
+        emit PenaltyApplied(productId, stakeholder, penaltyBps, reason, block.timestamp);
     }
 
     /// @notice Returns the inspection record for a batch.
@@ -343,13 +437,44 @@ contract ReputationContract {
         return _thresholds;
     }
 
+    /// @notice Returns the immutable scoring configuration used by a version.
+    function getConfigSnapshot(uint256 version)
+        external
+        view
+        returns (uint256[5] memory, uint256, uint256[4] memory)
+    {
+        ConfigSnapshot storage snapshot = _configSnapshots[version];
+        if (!snapshot.exists) revert ConfigVersionNotFound();
+        return (snapshot.weights, snapshot.alpha, snapshot.thresholds);
+    }
+
+    /// @notice Returns the trust label using a saved configuration version.
+    function trustLevelForScoreAtVersion(uint256 scoreBps, uint256 version)
+        external
+        view
+        returns (string memory)
+    {
+        if (scoreBps > 10000) revert InvalidScore();
+        ConfigSnapshot storage snapshot = _configSnapshots[version];
+        if (!snapshot.exists) revert ConfigVersionNotFound();
+        return _trustLevelForScore(scoreBps, snapshot.thresholds);
+    }
+
     /// @notice Returns the trust-level label for a basis-point score.
     function trustLevelForScore(uint256 scoreBps) public view returns (string memory) {
         if (scoreBps > 10000) revert InvalidScore();
-        if (scoreBps >= _thresholds[3]) return "Excellent";
-        if (scoreBps >= _thresholds[2]) return "Good";
-        if (scoreBps >= _thresholds[1]) return "Average";
-        if (scoreBps >= _thresholds[0]) return "Poor";
+        return _trustLevelForScore(scoreBps, _thresholds);
+    }
+
+    function _trustLevelForScore(uint256 scoreBps, uint256[4] storage thresholds_)
+        private
+        view
+        returns (string memory)
+    {
+        if (scoreBps >= thresholds_[3]) return "Excellent";
+        if (scoreBps >= thresholds_[2]) return "Good";
+        if (scoreBps >= thresholds_[1]) return "Average";
+        if (scoreBps >= thresholds_[0]) return "Poor";
         return "Critical";
     }
 
@@ -391,6 +516,7 @@ contract ReputationContract {
             quality + delivery + complaint + compliance + feedback != 10000
         ) revert InvalidWeights();
         _weights = [quality, delivery, complaint, compliance, feedback];
+        _advanceConfigVersion();
         emit WeightsUpdated(_weights);
     }
 
@@ -399,6 +525,7 @@ contract ReputationContract {
         _requireAdmin();
         if (newAlpha == 0 || newAlpha > 10000) revert InvalidAlpha();
         _alpha = newAlpha;
+        _advanceConfigVersion();
         emit AlphaUpdated(newAlpha);
     }
 
@@ -414,7 +541,21 @@ contract ReputationContract {
             excellent > 10000
         ) revert InvalidThresholds();
         _thresholds = [poor, average, good, excellent];
+        _advanceConfigVersion();
         emit ThresholdsUpdated(_thresholds);
+    }
+
+    function _advanceConfigVersion() private {
+        configVersion += 1;
+        _saveConfigSnapshot();
+    }
+
+    function _saveConfigSnapshot() private {
+        ConfigSnapshot storage snapshot = _configSnapshots[configVersion];
+        snapshot.weights = _weights;
+        snapshot.alpha = _alpha;
+        snapshot.thresholds = _thresholds;
+        snapshot.exists = true;
     }
 
     function _requireProduct(uint256 productId) private view {

@@ -1,0 +1,22 @@
+$kind: collection
+name: TABASC Throughput Tests
+description: |-
+  Throughput and performance analysis collection for TABASC (Trustworthy Agri-food Blockchain-Assisted Supply Chain).
+  
+  ## How to use for thesis
+  1. Make sure your server is running on http://localhost:5000
+  2. Select the "TABASC Dev" environment
+  3. Run the "0 - Auth Setup" folder FIRST to get a token
+  4. Then run individual folders or the full collection via Collection Runner
+  5. Check the Test Results tab for throughput metrics
+  
+  ## Metrics captured per request
+  - Response time (ms)
+  - Requests per second (throughput)
+  - Status code validation
+  - Blockchain vs DB operation timing
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{token}}'

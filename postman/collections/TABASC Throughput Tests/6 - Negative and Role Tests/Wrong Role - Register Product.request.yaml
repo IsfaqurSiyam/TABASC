@@ -1,0 +1,36 @@
+$kind: http-request
+name: Wrong Role - Register Product
+order: 3000
+url: '{{base_url}}/api/products/register'
+method: POST
+headers:
+  - key: Content-Type
+    value: application/json
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{consumer_token}}'
+body:
+  type: json
+  content: |-
+    {
+      "name": "Postman Negative Test",
+      "batchId": "POSTMAN-ROLE-{{$timestamp}}",
+      "deliveryWindow": 30,
+      "quantity": 1
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      const body = pm.response.json();
+      pm.test("Returns 403", () => pm.response.to.have.status(403));
+      pm.test("Returns the standard error shape", () => {
+          pm.expect(body.message).to.be.a("string").and.not.empty;
+          pm.expect(body.code).to.be.a("string").and.not.empty;
+      });
+      pm.test("Reports the farmer-only rule", () => {
+          pm.expect(body.message).to.eql("Only approved farmers can register products");
+          pm.expect(body.code).to.eql("FORBIDDEN");
+      });

@@ -1,0 +1,33 @@
+$kind: http-request
+name: Get Tracking History (Blockchain Read)
+order: 1000
+url: '{{base_url}}/api/tracking/{{test_blockchain_id}}'
+method: GET
+scripts:
+  - type: beforeRequest
+    language: text/javascript
+    code: |-
+      pm.globals.set("reqStart", Date.now());
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      const responseTime = pm.response.responseTime;
+      
+      let results = JSON.parse(pm.globals.get("throughput_results") || "[]");
+      results.push({
+          endpoint: "Get Tracking History",
+          responseTime: responseTime,
+          status: pm.response.code,
+          timestamp: Date.now(),
+          type: "blockchain-read"
+      });
+      pm.globals.set("throughput_results", JSON.stringify(results));
+      
+      pm.test("Tracking retrieved", () => {
+          pm.expect(pm.response.code).to.be.oneOf([200, 404]);
+      });
+      pm.test(`Response time < 1000ms (got ${responseTime}ms)`, () => {
+          pm.expect(responseTime).to.be.below(1000);
+      });
+      
+      console.log(`[Tracking History] ⛓️ Blockchain read: ${responseTime}ms`);

@@ -1,0 +1,34 @@
+$kind: http-request
+name: Feedback After Recall
+order: 7000
+url: '{{base_url}}/api/reputation/reviews'
+method: POST
+headers:
+  - key: Content-Type
+    value: application/json
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{consumer_token}}'
+body:
+  type: json
+  content: |-
+    {
+      "batchId": "{{recalled_sold_batch_id}}",
+      "rating": 8
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      const body = pm.response.json();
+      pm.test("Returns 409", () => pm.response.to.have.status(409));
+      pm.test("Returns the standard error shape", () => {
+          pm.expect(body.message).to.be.a("string").and.not.empty;
+          pm.expect(body.code).to.be.a("string").and.not.empty;
+      });
+      pm.test("Reports recalled-product feedback rejection", () => {
+          pm.expect(body.message).to.eql("Feedback cannot be submitted for a recalled product");
+          pm.expect(body.code).to.eql("PRODUCT_RECALLED");
+      });

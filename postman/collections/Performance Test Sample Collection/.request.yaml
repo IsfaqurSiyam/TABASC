@@ -1,0 +1,7 @@
+$kind: http-request
+name: ""
+url: https://postman-echo.com/get?hello=world
+method: GET
+queryParams:
+  hello: world
+order: 1000

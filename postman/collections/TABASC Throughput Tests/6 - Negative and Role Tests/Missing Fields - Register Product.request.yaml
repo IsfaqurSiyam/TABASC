@@ -1,0 +1,31 @@
+$kind: http-request
+name: Missing Fields - Register Product
+order: 4000
+url: '{{base_url}}/api/products/register'
+method: POST
+headers:
+  - key: Content-Type
+    value: application/json
+auth:
+  type: bearer
+  credentials:
+    - key: token
+      value: '{{farmer_token}}'
+body:
+  type: json
+  content: |-
+    {}
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      const body = pm.response.json();
+      pm.test("Returns 400", () => pm.response.to.have.status(400));
+      pm.test("Returns the standard error shape", () => {
+          pm.expect(body.message).to.be.a("string").and.not.empty;
+          pm.expect(body.code).to.be.a("string").and.not.empty;
+      });
+      pm.test("Reports the first missing required field", () => {
+          pm.expect(body.message).to.eql("name is required");
+          pm.expect(body.code).to.eql("VALIDATION_ERROR");
+      });

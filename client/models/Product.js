@@ -67,6 +67,10 @@ const ProductSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
+  proposedBuyer: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
   isRecalled: {
     type: Boolean,
     default: false

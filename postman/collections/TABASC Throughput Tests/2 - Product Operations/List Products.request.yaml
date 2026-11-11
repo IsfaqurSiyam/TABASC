@@ -1,0 +1,36 @@
+$kind: http-request
+name: List Products (DB Read)
+order: 1000
+url: '{{base_url}}/api/products?page=1&limit=10'
+method: GET
+queryParams:
+  - key: page
+    value: '1'
+  - key: limit
+    value: '10'
+scripts:
+  - type: beforeRequest
+    language: text/javascript
+    code: |-
+      pm.globals.set("reqStart", Date.now());
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      const responseTime = pm.response.responseTime;
+      
+      let results = JSON.parse(pm.globals.get("throughput_results") || "[]");
+      results.push({
+          endpoint: "List Products",
+          responseTime: responseTime,
+          status: pm.response.code,
+          timestamp: Date.now(),
+          type: "db-read"
+      });
+      pm.globals.set("throughput_results", JSON.stringify(results));
+      
+      pm.test("Products listed OK", () => pm.response.to.have.status(200));
+      pm.test(`Response time < 500ms (got ${responseTime}ms)`, () => {
+          pm.expect(responseTime).to.be.below(500);
+      });
+      
+      console.log(`[List Products] Response: ${responseTime}ms`);

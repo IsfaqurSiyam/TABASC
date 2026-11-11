@@ -1,0 +1,57 @@
+$kind: http-request
+name: 'Register Product (Blockchain Write)'
+order: 2000
+url: '{{base_url}}/api/products/register'
+method: POST
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "name": "Throughput Test Product",
+      "batchId": "BATCH-THROUGHPUT-{{$timestamp}}",
+      "category": "vegetables",
+      "quantity": 100,
+      "unit": "kg",
+      "price": 5.99,
+      "harvestDate": "2026-10-01",
+      "expiryDate": "2026-11-01",
+      "location": "Test Farm, Dhaka",
+      "description": "Automated throughput test product"
+    }
+scripts:
+  - type: beforeRequest
+    language: text/javascript
+    code: |-
+      pm.globals.set("blockchainWriteStart", Date.now());
+      console.log("⛓️ Starting blockchain write - this will be slower than DB reads");
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      const responseTime = pm.response.responseTime;
+      const jsonData = pm.response.json();
+      
+      // Save product ID for tracking test
+      if (jsonData.blockchainId) {
+          pm.environment.set("test_blockchain_id", jsonData.blockchainId);
+          pm.environment.set("test_batch_id", jsonData.batchId);
+      }
+      
+      let results = JSON.parse(pm.globals.get("throughput_results") || "[]");
+      results.push({
+          endpoint: "Register Product",
+          responseTime: responseTime,
+          status: pm.response.code,
+          timestamp: Date.now(),
+          type: "blockchain-write"
+      });
+      pm.globals.set("throughput_results", JSON.stringify(results));
+      
+      pm.test("Product registered (201 or 200)", () => {
+          pm.expect(pm.response.code).to.be.oneOf([200, 201]);
+      });
+      
+      console.log(`[Register Product] ⛓️ Blockchain write: ${responseTime}ms`);
+      console.log("NOTE: Blockchain writes are expected to be 2-10x slower than DB reads");

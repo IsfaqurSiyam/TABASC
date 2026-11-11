@@ -1,0 +1,7 @@
+$kind: collection
+name: '5 - Verify (Public)'
+description: |-
+  Public product verification endpoint - no auth required.
+  This is what consumers use to scan QR codes.
+  Important for thesis: measures public-facing throughput.
+order: 6000

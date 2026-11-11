@@ -2,3 +2,6 @@ node_modules/
 build/
 .env
 ganache-data/
+
+postman/environments/*.yaml
+!postman/environments/*.example.yaml

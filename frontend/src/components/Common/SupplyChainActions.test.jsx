@@ -36,19 +36,31 @@ test('farmers can transfer harvested product custody to an approved distributor'
   expect(onComplete).toHaveBeenCalled();
 });
 
-test('retailers can record an active consumer after sale', async () => {
+test('retailers can request confirmation from an active consumer after sale', async () => {
   const soldProduct = { ...product, currentStatus: 'Sold' };
   render(<SupplyChainActions products={[soldProduct]} role="retailer" onComplete={vi.fn()} />);
   fireEvent.change(screen.getByLabelText('Product'), { target: { value: soldProduct._id } });
-  fireEvent.change(screen.getByLabelText('Consumer email'), {
+  fireEvent.change(screen.getByLabelText('Consumer email to request confirmation'), {
     target: { value: 'consumer@example.test' }
   });
-  fireEvent.click(screen.getByRole('button', { name: /record buyer/i }));
+  fireEvent.click(screen.getByRole('button', { name: /request buyer confirmation/i }));
 
   await waitFor(() => expect(axios.post).toHaveBeenCalledWith(
     `${API_URL}/tracking/${soldProduct._id}/buyer`,
     { email: 'consumer@example.test' }
   ));
+  expect(await screen.findByRole('status')).toHaveTextContent('Action completed');
+});
+
+test('retailers cannot propose a second buyer while confirmation is pending', () => {
+  const soldProduct = {
+    ...product,
+    currentStatus: 'Sold',
+    proposedBuyer: { _id: 'consumer-id', name: 'Consumer' }
+  };
+  render(<SupplyChainActions products={[soldProduct]} role="retailer" onComplete={vi.fn()} />);
+  expect(screen.getByText('No eligible products are currently available for this action.'))
+    .toBeInTheDocument();
 });
 
 test('inspectors can issue a recall with its reason', async () => {

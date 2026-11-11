@@ -1,0 +1,80 @@
+$kind: http-request
+name: Generate Throughput Report
+order: 1000
+url: '{{base_url}}/api/health'
+method: GET
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      // ============================================================
+      // TABASC THROUGHPUT ANALYSIS REPORT
+      // Run this LAST after all other requests in the collection
+      // ============================================================
+      
+      const results = JSON.parse(pm.globals.get("throughput_results") || "[]");
+      
+      if (results.length === 0) {
+          console.log("⚠️ No results found. Run the other folders first!");
+          return;
+      }
+      
+      // Group by endpoint
+      const grouped = {};
+      results.forEach(r => {
+          if (!grouped[r.endpoint]) grouped[r.endpoint] = [];
+          grouped[r.endpoint].push(r.responseTime);
+      });
+      
+      console.log("\n");
+      console.log("╔══════════════════════════════════════════════════════════════╗");
+      console.log("║         TABASC THROUGHPUT ANALYSIS REPORT                   ║");
+      console.log("╠══════════════════════════════════════════════════════════════╣");
+      console.log(`║  Total Requests Measured: ${results.length.toString().padEnd(36)}║`);
+      console.log("╠══════════════════════════════════════════════════════════════╣");
+      
+      const allTimes = results.map(r => r.responseTime);
+      const overallAvg = (allTimes.reduce((a,b) => a+b, 0) / allTimes.length).toFixed(1);
+      const overallMin = Math.min(...allTimes);
+      const overallMax = Math.max(...allTimes);
+      
+      // Calculate throughput (requests per second)
+      const timeSpanMs = results[results.length-1].timestamp - results[0].timestamp;
+      const throughputRps = timeSpanMs > 0 ? (results.length / (timeSpanMs / 1000)).toFixed(2) : "N/A";
+      
+      console.log(`║  Overall Avg Response Time: ${overallAvg}ms`.padEnd(65) + "║");
+      console.log(`║  Min Response Time: ${overallMin}ms`.padEnd(65) + "║");
+      console.log(`║  Max Response Time: ${overallMax}ms`.padEnd(65) + "║");
+      console.log(`║  Estimated Throughput: ${throughputRps} req/s`.padEnd(65) + "║");
+      console.log("╠══════════════════════════════════════════════════════════════╣");
+      console.log("║  PER-ENDPOINT BREAKDOWN:                                     ║");
+      console.log("╠══════════════════════════════════════════════════════════════╣");
+      
+      Object.entries(grouped).forEach(([endpoint, times]) => {
+          const avg = (times.reduce((a,b) => a+b, 0) / times.length).toFixed(1);
+          const min = Math.min(...times);
+          const max = Math.max(...times);
+          const rps = (1000 / avg).toFixed(2);
+          console.log(`║  ${endpoint}`.padEnd(65) + "║");
+          console.log(`║    Avg: ${avg}ms | Min: ${min}ms | Max: ${max}ms | ~${rps} req/s`.padEnd(65) + "║");
+      });
+      
+      console.log("╚══════════════════════════════════════════════════════════════╝");
+      console.log("\n📋 THESIS TABLE DATA (copy this):");
+      console.log("Endpoint | Avg (ms) | Min (ms) | Max (ms) | Throughput (req/s)");
+      console.log("---------|----------|----------|----------|-------------------");
+      Object.entries(grouped).forEach(([endpoint, times]) => {
+          const avg = (times.reduce((a,b) => a+b, 0) / times.length).toFixed(1);
+          const min = Math.min(...times);
+          const max = Math.max(...times);
+          const rps = (1000 / avg).toFixed(2);
+          console.log(`${endpoint} | ${avg} | ${min} | ${max} | ${rps}`);
+      });
+      
+      // Reset for next run
+      pm.globals.unset("throughput_results");
+      pm.globals.unset("health_count");
+      pm.globals.unset("health_window_start");
+      
+      pm.test("Throughput report generated", () => pm.expect(results.length).to.be.above(0));
+      pm.test(`Overall avg response time: ${overallAvg}ms`, () => pm.expect(parseFloat(overallAvg)).to.be.above(0));

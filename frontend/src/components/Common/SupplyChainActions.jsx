@@ -27,7 +27,9 @@ function SupplyChainActions({ products, role, onComplete }) {
       : 'handover';
   const eligibleProducts = products.filter((product) => {
     if (action === 'recall') return !product.isRecalled;
-    if (action === 'buyer') return product.currentStatus === 'Sold' && !product.buyer;
+    if (action === 'buyer') {
+      return product.currentStatus === 'Sold' && !product.buyer && !product.proposedBuyer;
+    }
     return (role === 'farmer' && product.currentStatus === 'Harvested') ||
       (role === 'distributor' && product.currentStatus === 'Delivered');
   });
@@ -108,7 +110,13 @@ function SupplyChainActions({ products, role, onComplete }) {
       setProductId('');
       await onComplete();
     } catch (requestError) {
-      setError(requestError.response?.data?.message || requestError.message || 'Action failed');
+      const details = requestError.response?.data || {};
+      const messageText = details.message || requestError.message || 'Action failed';
+      if (details.code === 'RECIPIENT_RESTRICTED' || /restricted/i.test(messageText)) {
+        setError(`Warning: ${messageText}`);
+      } else {
+        setError(messageText);
+      }
     } finally {
       setLoading(false);
     }
@@ -116,12 +124,12 @@ function SupplyChainActions({ products, role, onComplete }) {
 
   const titles = {
     recall: 'Recall a product',
-    buyer: 'Record the consumer',
+    buyer: 'Request buyer confirmation',
     handover: 'Transfer product custody'
   };
   const descriptions = {
     recall: 'Only products not already recalled can be selected.',
-    buyer: 'Record the consumer after the product is marked Sold.',
+    buyer: 'Select a consumer to confirm the purchase after the product is marked Sold.',
     handover: role === 'farmer'
       ? 'Transfer a Harvested product to an approved distributor.'
       : 'Transfer a Delivered product to an approved retailer.'
@@ -159,7 +167,7 @@ function SupplyChainActions({ products, role, onComplete }) {
       {action !== 'recall' && (
         <>
           <label htmlFor={`${action}-email`}>
-            {action === 'buyer' ? 'Consumer email' : 'Approved recipient email'}
+            {action === 'buyer' ? 'Consumer email to request confirmation' : 'Approved recipient email'}
           </label>
           <input
             id={`${action}-email`}
@@ -233,7 +241,7 @@ function SupplyChainActions({ products, role, onComplete }) {
       >
         {loading ? 'Submitting...' : action === 'recall'
           ? 'Issue recall'
-          : action === 'buyer' ? 'Record buyer' : 'Transfer custody'}
+          : action === 'buyer' ? 'Request buyer confirmation' : 'Transfer custody'}
       </button>
       {eligibleProducts.length === 0 && (
         <p className="empty-state">No eligible products are currently available for this action.</p>

@@ -41,6 +41,7 @@ const {
 const { web3, TrackingContract } = require('../blockchain/web3');
 const { formatCareAttestation, readCareAttestation } = require('../services/careAttestation');
 const {
+  getFinalizedBatchDetails,
   getFinalizedBatchScore,
   saveBatchReputationScore
 } = require('../services/reputationScores');
@@ -520,12 +521,16 @@ test('delivery windows entered in days convert to bounded seconds before hashing
           web3.eth.abi.encodeParameter('address', stakeholder)
         ],
         data: web3.eth.abi.encodeParameters(
-          ['uint256', 'uint256', 'uint256', 'uint256'],
-          ['9100', '8200', '3', '1792663713']
+          ['uint256', 'uint256', 'uint256', 'uint256', 'uint256'],
+          ['9100', '8200', '3', '4', '1792663713']
         )
       }]
     };
     assert.equal(getFinalizedBatchScore(receipt, 7, stakeholder), 9100);
+    assert.deepEqual(getFinalizedBatchDetails(receipt, 7, stakeholder), {
+      scoreBps: 9100,
+      configVersion: 4
+    });
     assert.throws(() => getFinalizedBatchScore(receipt, 8, stakeholder), /does not match/);
   });
 

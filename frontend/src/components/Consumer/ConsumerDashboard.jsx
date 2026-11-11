@@ -11,6 +11,7 @@ function ConsumerDashboard() {
   const [product, setProduct] = useState(null);
   const [history, setHistory] = useState([]);
   const [careAttestation, setCareAttestation] = useState(null);
+  const [careError, setCareError] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -18,6 +19,7 @@ function ConsumerDashboard() {
   const [feedbackMsg, setFeedbackMsg] = useState('');
   const [feedbackError, setFeedbackError] = useState('');
   const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [buyerConfirmationLoading, setBuyerConfirmationLoading] = useState(false);
   const [feedbackEligibility, setFeedbackEligibility] = useState(null);
   const [feedbackEligibilityLoading, setFeedbackEligibilityLoading] = useState(false);
 
@@ -27,6 +29,7 @@ function ConsumerDashboard() {
     setProduct(null);
     setHistory([]);
     setCareAttestation(null);
+    setCareError('');
     setFeedbackEligibility(null);
     setFeedbackMsg('');
     setFeedbackError('');
@@ -57,8 +60,11 @@ function ConsumerDashboard() {
       try {
         const careResult = await axios.get(`${API_URL}/tracking/${res.data.blockchainId}/care`);
         setCareAttestation(careResult.data.careAttestation);
-      } catch {
+      } catch (careRequestError) {
         setCareAttestation(null);
+        setCareError(
+          careRequestError.response?.data?.message || 'Storage care details could not be loaded'
+        );
       }
     } catch (err) {
       setError(err.response?.data?.message || 'Product not found');
@@ -90,6 +96,28 @@ function ConsumerDashboard() {
       setFeedbackError(err.response?.data?.message || 'Review submission failed');
     } finally {
       setFeedbackLoading(false);
+    }
+  };
+
+  const handleBuyerConfirmation = async () => {
+    setFeedbackMsg('');
+    setFeedbackError('');
+    setBuyerConfirmationLoading(true);
+    try {
+      const response = await axios.post(
+        `${API_URL}/tracking/${product._id}/buyer/confirm`
+      );
+      setFeedbackMsg(response.data.message);
+      const eligibility = await axios.get(
+        `${API_URL}/reputation/feedback/${encodeURIComponent(product.batchId)}`
+      );
+      setFeedbackEligibility(eligibility.data);
+    } catch (requestError) {
+      setFeedbackError(
+        requestError.response?.data?.message || 'Buyer confirmation failed'
+      );
+    } finally {
+      setBuyerConfirmationLoading(false);
     }
   };
 
@@ -150,6 +178,7 @@ function ConsumerDashboard() {
           <p><strong>Farmer:</strong> {product.farmer?.name} — {product.farmer?.location}</p>
 
           <StorageCareAttestation care={careAttestation} />
+          {careError && <p className="error-message" role="alert">{careError}</p>}
 
           <h4>Supply Chain History</h4>
           {history.length === 0 ? (
@@ -176,6 +205,15 @@ function ConsumerDashboard() {
           {feedbackError && <p style={{ color: 'red' }}>{feedbackError}</p>}
           {feedbackEligibilityLoading && <p>Checking feedback eligibility...</p>}
           {feedbackEligibility?.reason && <p>{feedbackEligibility.reason}</p>}
+          {feedbackEligibility?.canConfirmBuyer && (
+            <button
+              type="button"
+              onClick={handleBuyerConfirmation}
+              disabled={buyerConfirmationLoading || feedbackEligibilityLoading}
+            >
+              {buyerConfirmationLoading ? 'Confirming purchase...' : 'Confirm this purchase'}
+            </button>
+          )}
           {feedbackEligibility?.canSubmit && (
             <>
               <label htmlFor="feedback-rating">Your rating (1–10)</label><br />
